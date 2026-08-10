@@ -1,6 +1,6 @@
 # Estimate to Word
 
-A browser-only SPA that converts an Inizio-style PDF cost estimate into an editable `.docx` file.
+A browser-only SPA that converts an PDF cost estimate into an editable `.docx` file.
 
 The app is deliberately tuned to the reference estimate format supplied for the MVP. It does not use Adobe APIs, OCR, a document conversion service, or an application backend.
 
