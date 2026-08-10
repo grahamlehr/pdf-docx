@@ -402,13 +402,16 @@ function detailLineItemRow(
 ): TableRow {
   const descriptionParagraphs = [paragraph(item.description, { size: 15 })];
   for (const note of item.notes) descriptionParagraphs.push(paragraph(note, { size: 14 }));
+  const rateText = item.quantity === undefined || item.rate === undefined
+    ? ""
+    : `${item.quantity.toFixed(2)} ${item.unit ?? ""} @ ${money(document, item.rate)}`;
 
   return new TableRow({
     children: [
       cell([paragraph("")], widths.number),
       cell(descriptionParagraphs, widths.description),
       cell(
-        [paragraph(`${item.quantity.toFixed(2)} ${item.unit} @ ${money(document, item.rate)}`, { size: 15, alignment: AlignmentType.RIGHT })],
+        [paragraph(rateText, { size: 15, alignment: AlignmentType.RIGHT })],
         widths.rate,
         { verticalAlign: VerticalAlign.TOP },
       ),

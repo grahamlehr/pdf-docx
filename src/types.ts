@@ -74,9 +74,9 @@ export interface EstimateOptionalRow {
 export interface EstimateLineItem {
   description: string;
   notes: string[];
-  quantity: number;
-  unit: string;
-  rate: number;
+  quantity?: number;
+  unit?: string;
+  rate?: number;
   amount: number;
   amounts: CurrencyAmounts;
 }

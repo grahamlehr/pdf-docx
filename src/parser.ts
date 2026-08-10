@@ -238,9 +238,28 @@ function primaryAmount(amounts: CurrencyAmounts, currencies: EstimateCurrency[])
 function metadataValue(lines: PdfLine[], label: string): string {
   const escaped = escapeRegex(label);
   const regex = new RegExp(`^${escaped}\\s*:?\\s*(.+)$`, "i");
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const match = normalizeLine(line.text).match(regex);
-    if (match?.[1]) return match[1].trim();
+    if (!match?.[1]) continue;
+
+    let value = match[1].trim();
+    let parenthesisBalance = (value.match(/\(/g)?.length ?? 0) - (value.match(/\)/g)?.length ?? 0);
+    let previousY = line.y;
+
+    // Project names occasionally wrap inside a parenthetical suffix. Continue
+    // only while that suffix is open and the next visual line is close by.
+    for (let nextIndex = index + 1; parenthesisBalance > 0 && nextIndex < lines.length; nextIndex += 1) {
+      const nextLine = lines[nextIndex];
+      if (nextLine.y - previousY > 24) break;
+      const continuation = normalizeLine(nextLine.text);
+      if (!continuation || /^(?:Project Number|Client Name|Project Name|Event\/Completion|Costing Version|Date)\s*:/i.test(continuation)) break;
+      value = `${value} ${continuation}`;
+      parenthesisBalance += (continuation.match(/\(/g)?.length ?? 0) - (continuation.match(/\)/g)?.length ?? 0);
+      previousY = nextLine.y;
+    }
+
+    return value;
   }
   return "";
 }
@@ -248,7 +267,9 @@ function metadataValue(lines: PdfLine[], label: string): string {
 function isBoilerplate(line: PdfLine, pageHeight: number): boolean {
   const text = normalizeLine(line.text);
   if (line.y < 108) return true;
-  if (line.y > pageHeight - 125) return true;
+  // Some Procim estimates place a final detail row very close to the footer.
+  // Keep that usable content while still excluding the footer band itself.
+  if (line.y > pageHeight - 110) return true;
   if (/^Date:\s*\d{2}\/\d{2}\/\d{4}/i.test(text)) return true;
   if (/^Page:\s*\d+/i.test(text)) return true;
   if (/^(?:Inizio Engage XD Limited|The Creative Engagement Group Ltd|Inizio Engage)$/i.test(text)) return true;
@@ -284,6 +305,27 @@ function parseLineItem(text: string, currencies: EstimateCurrency[]): EstimateLi
     rate,
     amount: primaryAmount(amounts, currencies),
     amounts,
+  };
+}
+
+function parseAmountOnlyLineItem(
+  text: string,
+  currencies: EstimateCurrency[],
+): EstimateLineItem | undefined {
+  const normalized = normalizeLine(text);
+  if (normalized.includes(" @ ")) return undefined;
+
+  const extracted = extractAmounts(normalized, currencies);
+  if (!extracted) return undefined;
+
+  const description = normalized.slice(0, extracted.firstIndex).trim();
+  if (!description || extracted.amounts[currencies[0].id] === undefined) return undefined;
+
+  return {
+    description,
+    notes: [],
+    amount: primaryAmount(extracted.amounts, currencies),
+    amounts: extracted.amounts,
   };
 }
 
@@ -502,7 +544,7 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
         continue;
       }
 
-      const lineItem = parseLineItem(text, currencies);
+      const lineItem = parseLineItem(text, currencies) ?? parseAmountOnlyLineItem(text, currencies);
       if (lineItem && currentSection) {
         if (lineItem.description) {
           if (pendingLines.length && lastItem && pendingLines.every(isBulletLine)) {

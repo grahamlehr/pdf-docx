@@ -196,7 +196,11 @@ function WordPreview({ estimate }: { estimate: EstimateDocument }) {
               {section.items.map((item, index) => (
                 <div className="detail-row" style={detailGrid} key={`${section.number}-item-${index}`}>
                   <span></span><ItemDescription item={item} />
-                  <span className="currency-value">{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span>
+                  <span className="currency-value">
+                    {item.quantity !== undefined && item.rate !== undefined
+                      ? `${item.quantity.toFixed(2)} ${item.unit ?? ""} @ ${money(item.rate)}`
+                      : ""}
+                  </span>
                   {currencies.map((currency) => (
                     <span className="currency-value" key={currency.id}>
                       {item.amounts[currency.id] === undefined ? "" : money(item.amounts[currency.id], currency)}
@@ -222,7 +226,11 @@ function WordPreview({ estimate }: { estimate: EstimateDocument }) {
                   {subsection.items.map((item, index) => (
                     <div className="detail-row" style={detailGrid} key={`${subsection.number}-item-${index}`}>
                       <span></span><ItemDescription item={item} />
-                      <span className="currency-value">{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span>
+                      <span className="currency-value">
+                        {item.quantity !== undefined && item.rate !== undefined
+                          ? `${item.quantity.toFixed(2)} ${item.unit ?? ""} @ ${money(item.rate)}`
+                          : ""}
+                      </span>
                       {currencies.map((currency) => (
                         <span className="currency-value" key={currency.id}>
                           {item.amounts[currency.id] === undefined ? "" : money(item.amounts[currency.id], currency)}
@@ -408,7 +416,7 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        <span>V1.2</span>
+        <span>V1.4</span>
         <span>grahamlehr.github.io</span>
       </footer>
     </div>
