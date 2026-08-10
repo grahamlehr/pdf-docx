@@ -26,7 +26,13 @@ export interface PdfPageData {
 
 export interface ParsedPdf {
   pages: PdfPageData[];
-  logoPng?: Uint8Array;
+  logo?: PdfLogo;
+}
+
+export interface PdfLogo {
+  data: Uint8Array;
+  width: number;
+  height: number;
 }
 
 export interface EstimateCurrency {

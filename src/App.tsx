@@ -289,7 +289,7 @@ export default function App() {
     setStatus("generating");
     setError("");
     try {
-      const blob = await generateEstimateDocx(estimate, parsedPdf.logoPng);
+      const blob = await generateEstimateDocx(estimate, parsedPdf.logo);
       downloadBlob(blob, suggestedDocxName(estimate));
       setStatus("ready");
     } catch (reason) {

@@ -1,6 +1,6 @@
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import type { ParsedPdf, PdfLine, PdfPageData, PdfTextFragment } from "./types";
+import type { ParsedPdf, PdfLine, PdfLogo, PdfPageData, PdfTextFragment } from "./types";
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -75,9 +75,52 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
   return bytes;
 }
 
-async function cropLogo(pageProxy: any, baseViewport: any): Promise<Uint8Array | undefined> {
+interface PixelBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function findInkBounds(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+): PixelBounds | undefined {
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      const alpha = pixels[offset + 3];
+      if (alpha < 24) continue;
+
+      const red = pixels[offset];
+      const green = pixels[offset + 1];
+      const blue = pixels[offset + 2];
+      const distanceFromWhite = Math.max(255 - red, 255 - green, 255 - blue);
+      if (distanceFromWhite < 28) continue;
+
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+
+  if (right < left || bottom < top) return undefined;
+  return { left, top, right, bottom };
+}
+
+async function cropLogo(pageProxy: any, baseViewport: any): Promise<PdfLogo | undefined> {
   try {
-    const scale = 2;
+    // Render generously around the top-right header, then trim to the actual ink.
+    // The old fixed crop both clipped template variants and included inconsistent
+    // whitespace, which was then stretched into a fixed DOCX rectangle.
+    const scale = 3;
     const viewport = pageProxy.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
@@ -87,10 +130,30 @@ async function cropLogo(pageProxy: any, baseViewport: any): Promise<Uint8Array |
 
     await pageProxy.render({ canvasContext: context, viewport }).promise;
 
-    const sourceX = Math.round(baseViewport.width * 0.69 * scale);
-    const sourceY = Math.round(baseViewport.height * 0.005 * scale);
-    const sourceWidth = Math.round(baseViewport.width * 0.285 * scale);
-    const sourceHeight = Math.round(baseViewport.height * 0.105 * scale);
+    const searchX = Math.round(baseViewport.width * 0.56 * scale);
+    const searchY = 0;
+    const searchWidth = Math.min(
+      canvas.width - searchX,
+      Math.round(baseViewport.width * 0.43 * scale),
+    );
+    const searchHeight = Math.min(
+      canvas.height,
+      Math.round(baseViewport.height * 0.16 * scale),
+    );
+
+    const searchPixels = context.getImageData(searchX, searchY, searchWidth, searchHeight);
+    const bounds = findInkBounds(searchPixels.data, searchWidth, searchHeight);
+    if (!bounds) return undefined;
+
+    const padding = Math.round(5 * scale);
+    const sourceX = searchX + Math.max(0, bounds.left - padding);
+    const sourceY = searchY + Math.max(0, bounds.top - padding);
+    const sourceRight = searchX + Math.min(searchWidth, bounds.right + padding + 1);
+    const sourceBottom = searchY + Math.min(searchHeight, bounds.bottom + padding + 1);
+    const sourceWidth = sourceRight - sourceX;
+    const sourceHeight = sourceBottom - sourceY;
+
+    if (sourceWidth < 2 || sourceHeight < 2) return undefined;
 
     const crop = document.createElement("canvas");
     crop.width = sourceWidth;
@@ -110,7 +173,11 @@ async function cropLogo(pageProxy: any, baseViewport: any): Promise<Uint8Array |
       sourceHeight,
     );
 
-    return dataUrlToBytes(crop.toDataURL("image/png"));
+    return {
+      data: dataUrlToBytes(crop.toDataURL("image/png")),
+      width: sourceWidth,
+      height: sourceHeight,
+    };
   } catch {
     return undefined;
   }
@@ -120,7 +187,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdf> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const pdf = await getDocument({ data: bytes }).promise;
   const pages: PdfPageData[] = [];
-  let logoPng: Uint8Array | undefined;
+  let logo: PdfLogo | undefined;
   let textCount = 0;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -159,7 +226,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdf> {
     });
 
     if (pageNumber === 1) {
-      logoPng = await cropLogo(page, viewport);
+      logo = await cropLogo(page, viewport);
     }
   }
 
@@ -169,5 +236,5 @@ export async function parsePdfFile(file: File): Promise<ParsedPdf> {
     );
   }
 
-  return { pages, logoPng };
+  return { pages, logo };
 }

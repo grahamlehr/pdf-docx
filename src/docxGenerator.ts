@@ -18,7 +18,7 @@ import {
   WidthType,
 } from "docx";
 import { formatEstimateMoney } from "./parser";
-import type { EstimateCurrency, EstimateDocument, EstimateLineItem } from "./types";
+import type { EstimateCurrency, EstimateDocument, EstimateLineItem, PdfLogo } from "./types";
 
 const PAGE_WIDTH = 11906;
 const PAGE_HEIGHT = 16838;
@@ -105,7 +105,17 @@ function table(rows: TableRow[], columnWidths: number[]): Table {
   });
 }
 
-function createHeader(document: EstimateDocument, logoPng?: Uint8Array): Header {
+function logoSize(logo: PdfLogo): { width: number; height: number } {
+  const maxWidth = 190;
+  const maxHeight = 76;
+  const scale = Math.min(maxWidth / logo.width, maxHeight / logo.height);
+  return {
+    width: Math.max(1, Math.round(logo.width * scale)),
+    height: Math.max(1, Math.round(logo.height * scale)),
+  };
+}
+
+function createHeader(document: EstimateDocument, logo?: PdfLogo): Header {
   const leftWidth = 6200;
   const rightWidth = CONTENT_WIDTH - leftWidth;
 
@@ -114,7 +124,8 @@ function createHeader(document: EstimateDocument, logoPng?: Uint8Array): Header 
     : [paragraph("Inizio Engage XD Limited", { bold: true, size: 14 })];
 
   let logoParagraphs: Paragraph[];
-  if (logoPng?.length) {
+  if (logo?.data.length) {
+    const transformation = logoSize(logo);
     logoParagraphs = [
       new Paragraph({
         alignment: AlignmentType.RIGHT,
@@ -122,8 +133,8 @@ function createHeader(document: EstimateDocument, logoPng?: Uint8Array): Header 
         children: [
           new ImageRun({
             type: "png",
-            data: logoPng,
-            transformation: { width: 190, height: 76 },
+            data: logo.data,
+            transformation,
           }),
         ],
       }),
@@ -501,7 +512,7 @@ function buildBody(document: EstimateDocument): Array<Paragraph | Table> {
   return body;
 }
 
-export async function generateEstimateDocx(document: EstimateDocument, logoPng?: Uint8Array): Promise<Blob> {
+export async function generateEstimateDocx(document: EstimateDocument, logo?: PdfLogo): Promise<Blob> {
   const wordDocument = new Document({
     creator: "Estimate to Word",
     description: "Editable Word reconstruction of a PDF cost estimate",
@@ -520,7 +531,7 @@ export async function generateEstimateDocx(document: EstimateDocument, logoPng?:
             },
           },
         },
-        headers: { default: createHeader(document, logoPng) },
+        headers: { default: createHeader(document, logo) },
         footers: { default: createFooter(document) },
         children: buildBody(document),
       },
