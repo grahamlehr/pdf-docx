@@ -215,7 +215,7 @@ export default function App() {
       const document = buildEstimateDocument(parsed, file.name);
       if (!document.summary.length || !document.sections.length) {
         throw new Error(
-          "I could read the PDF, but it does not match the Inizio/Emota cost-estimate structure this converter supports yet.",
+          "I could read the PDF, but it does not match the cost-estimate structure this converter supports yet.",
         );
       }
       setParsedPdf(parsed);
@@ -269,9 +269,8 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <p className="eyebrow">Inizio estimate converter</p>
+            <p className="eyebrow">Estimate converter</p>
             <h1>Turn a PDF cost estimate into an editable Word document.</h1>
-            <p className="hero-copy">No Adobe API. No document upload service. PDF parsing and Word generation happen in the browser.</p>
           </div>
           {estimate && (
             <div className="hero-actions">
@@ -303,7 +302,7 @@ export default function App() {
             />
             <div className="drop-icon"><Icon name="upload" /></div>
             <h2>{status === "reading" ? "Reading estimate..." : "Drop an estimate PDF here"}</h2>
-            <p>{status === "reading" ? "Extracting text, layout, page previews and logo." : "Supports the Inizio/Emota cost-estimate family, including GBP and USD estimates."}</p>
+            <p>{status === "reading" ? "Extracting text, layout, page previews and logo." : "Supports the Procim cost-estimate family, with GBP, EUR and USD estimates."}</p>
             <button className="button primary" disabled={status === "reading"} onClick={() => fileInputRef.current?.click()}>
               <Icon name="file" /> Choose PDF
             </button>
@@ -350,7 +349,7 @@ export default function App() {
 
               <section className="panel privacy-panel">
                 <div className="mini-icon"><Icon name="lock" /></div>
-                <div><strong>Local-only processing</strong><p>The PDF is read with PDF.js and the DOCX is created in-browser. There is no app server in this project.</p></div>
+                <div><strong>Local-only processing</strong><p>The PDF is read and the DOCX is created in your browser. No data is sent to the cloud.</p></div>
               </section>
             </aside>
           </div>
@@ -358,8 +357,8 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        <span>Estimate to Word MVP</span>
-        <span>PDF.js + docx</span>
+        <span>V1.1</span>
+        <span>grahamlehr.github.io</span>
       </footer>
     </div>
   );
