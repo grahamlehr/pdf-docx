@@ -30,10 +30,17 @@ export interface ParsedPdf {
 }
 
 export interface EstimateCurrency {
-  symbol: string;
+  id: string;
+  label: string;
   code: string;
-  spaceAfterSymbol: boolean;
+  position: "prefix" | "suffix";
+  spaceBetween: boolean;
+  decimalSeparator: "." | ",";
+  thousandsSeparator?: "," | "." | " " | "'" | "’";
+  decimalPlaces: number;
 }
+
+export type CurrencyAmounts = Record<string, number>;
 
 export interface EstimateMetadata {
   projectNumber: string;
@@ -48,12 +55,14 @@ export interface EstimateSummaryRow {
   number: string;
   description: string;
   amount: number;
+  amounts: CurrencyAmounts;
 }
 
 export interface EstimateOptionalRow {
   number: string;
   description: string;
   amount?: number;
+  amounts: CurrencyAmounts;
 }
 
 export interface EstimateLineItem {
@@ -63,12 +72,14 @@ export interface EstimateLineItem {
   unit: string;
   rate: number;
   amount: number;
+  amounts: CurrencyAmounts;
 }
 
 export interface EstimateSubsection {
   number: string;
   title: string;
   amount: number;
+  amounts: CurrencyAmounts;
   items: EstimateLineItem[];
   narrative: string[];
 }
@@ -77,6 +88,7 @@ export interface EstimateSection {
   number: string;
   title: string;
   amount: number;
+  amounts: CurrencyAmounts;
   items: EstimateLineItem[];
   narrative: string[];
   subsections: EstimateSubsection[];
@@ -85,13 +97,16 @@ export interface EstimateSection {
 export interface EstimateDocument {
   sourceFileName: string;
   currency: EstimateCurrency;
+  currencies: EstimateCurrency[];
   metadata: EstimateMetadata;
   companyHeaderLines: string[];
   footerLegalLines: string[];
   summary: EstimateSummaryRow[];
   total: number;
+  totals: CurrencyAmounts;
   optionalSummary: EstimateOptionalRow[];
   optionalTotal?: number;
+  optionalTotals: CurrencyAmounts;
   notes: string[];
   exclusions: string[];
   sections: EstimateSection[];

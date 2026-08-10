@@ -1,4 +1,5 @@
 import type {
+  CurrencyAmounts,
   EstimateCurrency,
   EstimateDocument,
   EstimateLineItem,
@@ -10,8 +11,7 @@ import type {
   ValidationCheck,
 } from "./types";
 
-const CURRENCY_SYMBOL_PATTERN = "(?:£|\\$|€)";
-const MONEY_PATTERN = `${CURRENCY_SYMBOL_PATTERN}\\s*[\\d,]+(?:\\.\\d{2})`;
+const NUMBER_PATTERN = String.raw`[-+]?(?:\d{1,3}(?:[,.'’\s]\d{3})+|\d+)(?:[.,]\d{1,4})?`;
 
 function normalizeLine(value: string): string {
   return value
@@ -20,59 +20,223 @@ function normalizeLine(value: string): string {
     .trim();
 }
 
-function moneyToNumber(value: string): number {
-  return Number(value.replace(/[^\d.-]/g, ""));
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function currencyCode(symbol: string): string {
-  if (symbol === "£") return "GBP";
-  if (symbol === "$") return "USD";
-  if (symbol === "€") return "EUR";
-  return symbol;
+function parseLocaleNumber(rawValue: string): number {
+  let value = rawValue.trim().replace(/[’']/g, "").replace(/\s/g, "");
+  const negative = /^-/.test(value);
+  value = value.replace(/^[-+]/, "");
+
+  const lastDot = value.lastIndexOf(".");
+  const lastComma = value.lastIndexOf(",");
+  let decimalSeparator: "." | "," | undefined;
+
+  if (lastDot >= 0 && lastComma >= 0) {
+    decimalSeparator = lastDot > lastComma ? "." : ",";
+  } else if (lastDot >= 0 || lastComma >= 0) {
+    const separator = lastDot >= 0 ? "." : ",";
+    const index = value.lastIndexOf(separator);
+    const digitsAfter = value.length - index - 1;
+    if (digitsAfter > 0 && digitsAfter <= 4 && digitsAfter !== 3) decimalSeparator = separator;
+  }
+
+  if (decimalSeparator) {
+    const thousandsSeparator = decimalSeparator === "." ? "," : ".";
+    value = value.split(thousandsSeparator).join("");
+    if (decimalSeparator === ",") value = value.replace(",", ".");
+  } else {
+    value = value.replace(/[.,]/g, "");
+  }
+
+  const result = Number(value);
+  return negative ? -result : result;
 }
 
-function detectCurrency(parsedPdf: ParsedPdf): EstimateCurrency {
+function detectNumberStyle(rawValue: string): Pick<EstimateCurrency, "decimalSeparator" | "thousandsSeparator" | "decimalPlaces"> {
+  const value = rawValue.trim();
+  const compact = value.replace(/[’']/g, "'");
+  const lastDot = compact.lastIndexOf(".");
+  const lastComma = compact.lastIndexOf(",");
+  let decimalSeparator: "." | "," = ".";
+  let thousandsSeparator: EstimateCurrency["thousandsSeparator"];
+  let decimalPlaces = 0;
+
+  if (lastDot >= 0 && lastComma >= 0) {
+    decimalSeparator = lastDot > lastComma ? "." : ",";
+    thousandsSeparator = decimalSeparator === "." ? "," : ".";
+    decimalPlaces = compact.length - Math.max(lastDot, lastComma) - 1;
+  } else {
+    const separator: "." | "," | undefined = lastDot >= 0 ? "." : lastComma >= 0 ? "," : undefined;
+    if (separator) {
+      const index = compact.lastIndexOf(separator);
+      const digitsAfter = compact.length - index - 1;
+      if (digitsAfter > 0 && digitsAfter <= 4 && digitsAfter !== 3) {
+        decimalSeparator = separator;
+        decimalPlaces = digitsAfter;
+      } else {
+        thousandsSeparator = separator;
+      }
+    }
+  }
+
+  if (!thousandsSeparator) {
+    if (/\d[’']\d{3}/.test(value)) thousandsSeparator = value.includes("’") ? "’" : "'";
+    else if (/\d\s\d{3}/.test(value)) thousandsSeparator = " ";
+  }
+
+  return { decimalSeparator, thousandsSeparator, decimalPlaces };
+}
+
+function currencyCode(label: string): string {
+  const compact = label.replace(/[^A-Za-z]/g, "").toUpperCase();
+  return compact.length >= 2 && compact.length <= 5 ? compact : label;
+}
+
+function headingCurrencyLabels(text: string): string[] {
+  const tail = text.replace(/^.*?Cost Estimate (?:Summary|Detail)\s*/i, "");
+  return [...tail.matchAll(/(\S+)\s+Amount\b/gi)].map((match) => match[1]).filter(Boolean);
+}
+
+function findCurrencySample(lines: string[], label: string): {
+  rawNumber: string;
+  position: "prefix" | "suffix";
+  spaceBetween: boolean;
+} | undefined {
+  const token = escapeRegex(label);
+  const prefix = new RegExp(`${token}(\\s*)(${NUMBER_PATTERN})`, "i");
+  const suffix = new RegExp(`(${NUMBER_PATTERN})(\\s*)${token}`, "i");
+
+  for (const line of lines) {
+    const prefixMatch = line.match(prefix);
+    if (prefixMatch) {
+      return { rawNumber: prefixMatch[2], position: "prefix", spaceBetween: Boolean(prefixMatch[1]) };
+    }
+    const suffixMatch = line.match(suffix);
+    if (suffixMatch) {
+      return { rawNumber: suffixMatch[1], position: "suffix", spaceBetween: Boolean(suffixMatch[2]) };
+    }
+  }
+  return undefined;
+}
+
+function detectCurrencies(parsedPdf: ParsedPdf): EstimateCurrency[] {
   const lines = parsedPdf.pages.flatMap((page) => page.lines.map((line) => normalizeLine(line.text)));
+  let labels: string[] = [];
 
   for (const text of lines) {
-    const headingMatch = text.match(/(?:Cost Estimate Summary|Cost Estimate Detail)\s+([£$€])\s*Amount/i);
-    if (headingMatch?.[1]) {
-      const symbol = headingMatch[1];
-      const firstAmount = lines
-        .map((candidate) => candidate.match(new RegExp(`(${CURRENCY_SYMBOL_PATTERN})(\\s*)[\\d,]+(?:\\.\\d{2})`)))
-        .find((match) => match?.[1] === symbol);
-      return {
-        symbol,
-        code: currencyCode(symbol),
-        spaceAfterSymbol: Boolean(firstAmount?.[2]),
-      };
+    if (!/Cost Estimate (?:Summary|Detail)/i.test(text)) continue;
+    const found = headingCurrencyLabels(text);
+    if (found.length) {
+      labels = found;
+      break;
     }
   }
 
-  for (const text of lines) {
-    const match = text.match(new RegExp(`(${CURRENCY_SYMBOL_PATTERN})(\\s*)[\\d,]+(?:\\.\\d{2})`));
-    if (match?.[1]) {
-      return {
-        symbol: match[1],
-        code: currencyCode(match[1]),
-        spaceAfterSymbol: Boolean(match[2]),
-      };
+  if (!labels.length) {
+    for (const text of lines) {
+      const match = text.match(new RegExp(`([\\p{Sc}]|[A-Z]{3,5})\\s*(${NUMBER_PATTERN})`, "u"));
+      if (match?.[1]) {
+        labels = [match[1]];
+        break;
+      }
     }
   }
 
-  return { symbol: "£", code: "GBP", spaceAfterSymbol: false };
+  if (!labels.length) {
+    throw new Error("I could read the estimate, but could not detect its displayed currency from the Amount heading.");
+  }
+
+  return labels.map((label, index) => {
+    const sample = findCurrencySample(lines, label);
+    const numberStyle = detectNumberStyle(sample?.rawNumber ?? "1,234.56");
+    return {
+      id: `currency-${index + 1}`,
+      label,
+      code: currencyCode(label),
+      position: sample?.position ?? "prefix",
+      spaceBetween: sample?.spaceBetween ?? false,
+      ...numberStyle,
+    };
+  });
 }
 
 export function formatEstimateMoney(value: number, currency: EstimateCurrency): string {
-  const number = new Intl.NumberFormat("en-GB", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-  return `${currency.symbol}${currency.spaceAfterSymbol ? " " : ""}${number}`;
+  const decimals = Math.max(0, Math.min(6, currency.decimalPlaces));
+  const fixed = Math.abs(value).toFixed(decimals);
+  const [integerPart, decimalPart] = fixed.split(".");
+  const groups: string[] = [];
+  let remaining = integerPart;
+  while (remaining.length > 3) {
+    groups.unshift(remaining.slice(-3));
+    remaining = remaining.slice(0, -3);
+  }
+  groups.unshift(remaining);
+
+  const thousands = currency.thousandsSeparator ?? (currency.decimalSeparator === "," ? "." : ",");
+  const numeric = `${value < 0 ? "-" : ""}${groups.join(thousands)}${decimals ? `${currency.decimalSeparator}${decimalPart}` : ""}`;
+  const space = currency.spaceBetween ? " " : "";
+  return currency.position === "suffix" ? `${numeric}${space}${currency.label}` : `${currency.label}${space}${numeric}`;
+}
+
+export function amountForCurrency(amounts: CurrencyAmounts, currency: EstimateCurrency): number | undefined {
+  return amounts[currency.id];
+}
+
+interface MoneyOccurrence {
+  currency: EstimateCurrency;
+  value: number;
+  rawNumber: string;
+  index: number;
+  end: number;
+}
+
+function moneyOccurrences(text: string, currencies: EstimateCurrency[]): MoneyOccurrence[] {
+  const occurrences: MoneyOccurrence[] = [];
+
+  for (const currency of currencies) {
+    const token = escapeRegex(currency.label);
+    const patterns = [
+      new RegExp(`${token}\\s*(${NUMBER_PATTERN})`, "giu"),
+      new RegExp(`(${NUMBER_PATTERN})\\s*${token}`, "giu"),
+    ];
+
+    for (const pattern of patterns) {
+      for (const match of text.matchAll(pattern)) {
+        const rawNumber = match[1];
+        const index = match.index ?? 0;
+        occurrences.push({
+          currency,
+          value: parseLocaleNumber(rawNumber),
+          rawNumber,
+          index,
+          end: index + match[0].length,
+        });
+      }
+    }
+  }
+
+  return occurrences
+    .sort((a, b) => a.index - b.index || a.end - b.end)
+    .filter((item, index, all) => index === 0 || item.index !== all[index - 1].index || item.end !== all[index - 1].end);
+}
+
+function extractAmounts(text: string, currencies: EstimateCurrency[]): { amounts: CurrencyAmounts; firstIndex: number } | undefined {
+  const occurrences = moneyOccurrences(text, currencies);
+  if (!occurrences.length) return undefined;
+
+  const amounts: CurrencyAmounts = {};
+  for (const occurrence of occurrences) amounts[occurrence.currency.id] = occurrence.value;
+  return { amounts, firstIndex: Math.min(...occurrences.map((item) => item.index)) };
+}
+
+function primaryAmount(amounts: CurrencyAmounts, currencies: EstimateCurrency[]): number {
+  return amounts[currencies[0].id] ?? 0;
 }
 
 function metadataValue(lines: PdfLine[], label: string): string {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escapeRegex(label);
   const regex = new RegExp(`^${escaped}\\s*:?\\s*(.+)$`, "i");
   for (const line of lines) {
     const match = normalizeLine(line.text).match(regex);
@@ -87,52 +251,62 @@ function isBoilerplate(line: PdfLine, pageHeight: number): boolean {
   if (line.y > pageHeight - 125) return true;
   if (/^Date:\s*\d{2}\/\d{2}\/\d{4}/i.test(text)) return true;
   if (/^Page:\s*\d+/i.test(text)) return true;
-  if (/^(?:Inizio Engage XD Limited|The Creative Engagement Group Ltd)$/i.test(text)) return true;
+  if (/^(?:Inizio Engage XD Limited|The Creative Engagement Group Ltd|Inizio Engage)$/i.test(text)) return true;
   if (/^Registered address:/i.test(text)) return true;
-  if (/Company Registration 01244084/i.test(text)) return true;
+  if (/Company Registration/i.test(text)) return true;
   return false;
 }
 
-function parseLineItem(text: string): EstimateLineItem | undefined {
+function parseLineItem(text: string, currencies: EstimateCurrency[]): EstimateLineItem | undefined {
   const normalized = normalizeLine(text);
-  const regex = new RegExp(
-    `^(.*?)\\s+(\\d+(?:\\.\\d+)?)\\s+([A-Za-z][A-Za-z /&-]*)\\s+@\\s+(${MONEY_PATTERN})\\s+(${MONEY_PATTERN})$`,
-    "i",
-  );
-  const match = normalized.match(regex);
-  if (!match) return undefined;
+  const atIndex = normalized.indexOf(" @ ");
+  if (atIndex < 0) return undefined;
+
+  const left = normalized.slice(0, atIndex).trim();
+  const right = normalized.slice(atIndex + 3).trim();
+  const leftMatch = left.match(/^(.*?)(\d+(?:[.,]\d+)?)\s+([A-Za-z][A-Za-z0-9 /&()._-]*)$/i);
+  if (!leftMatch) return undefined;
+
+  const occurrences = moneyOccurrences(right, currencies);
+  if (occurrences.length < 2) return undefined;
+
+  const rate = occurrences[0].value;
+  const amountOccurrences = occurrences.slice(1);
+  const amounts: CurrencyAmounts = {};
+  for (const occurrence of amountOccurrences) amounts[occurrence.currency.id] = occurrence.value;
+  if (amounts[currencies[0].id] === undefined) return undefined;
 
   return {
-    description: match[1].trim(),
+    description: leftMatch[1].trim(),
     notes: [],
-    quantity: Number(match[2]),
-    unit: match[3].trim(),
-    rate: moneyToNumber(match[4]),
-    amount: moneyToNumber(match[5]),
+    quantity: parseLocaleNumber(leftMatch[2]),
+    unit: leftMatch[3].trim(),
+    rate,
+    amount: primaryAmount(amounts, currencies),
+    amounts,
   };
 }
 
-function parseSectionHeading(text: string): { number: string; title: string; amount: number } | undefined {
+function parseHeading(text: string, currencies: EstimateCurrency[], subsection: boolean): {
+  number: string;
+  title: string;
+  amount: number;
+  amounts: CurrencyAmounts;
+} | undefined {
   const normalized = normalizeLine(text);
-  const regex = new RegExp(`^(\\d+)\\s+(.+?)\\s+(${MONEY_PATTERN})$`);
-  const match = normalized.match(regex);
-  if (!match) return undefined;
+  if (normalized.includes(" @ ")) return undefined;
+  const numberMatch = normalized.match(subsection ? /^(\d+\.\d+)\s+(.+)$/ : /^(\d+)\s+(.+)$/);
+  if (!numberMatch) return undefined;
+  const remainder = numberMatch[2];
+  const extracted = extractAmounts(remainder, currencies);
+  if (!extracted) return undefined;
+  const title = remainder.slice(0, extracted.firstIndex).trim();
+  if (!title) return undefined;
   return {
-    number: match[1],
-    title: match[2].trim(),
-    amount: moneyToNumber(match[3]),
-  };
-}
-
-function parseSubsectionHeading(text: string): { number: string; title: string; amount: number } | undefined {
-  const normalized = normalizeLine(text);
-  const regex = new RegExp(`^(\\d+\\.\\d+)\\s+(.+?)\\s+(${MONEY_PATTERN})$`);
-  const match = normalized.match(regex);
-  if (!match) return undefined;
-  return {
-    number: match[1],
-    title: match[2].trim(),
-    amount: moneyToNumber(match[3]),
+    number: numberMatch[1],
+    title,
+    amount: primaryAmount(extracted.amounts, currencies),
+    amounts: extracted.amounts,
   };
 }
 
@@ -149,15 +323,30 @@ function appendNarrative(target: string[], text: string): void {
     target[target.length - 1] = `${previous} ${normalized}`;
     return;
   }
-
   target.push(normalized);
+}
+
+function isBulletLine(text: string): boolean {
+  return /^[•·▪●*-]\s*/.test(normalizeLine(text));
+}
+
+function flushPendingNarrative(
+  pending: string[],
+  currentSection: EstimateSection | undefined,
+  currentSubsection: EstimateSubsection | undefined,
+): void {
+  if (!pending.length || !currentSection) return;
+  const target = currentSubsection ? currentSubsection.narrative : currentSection.narrative;
+  for (const line of pending) appendNarrative(target, line);
+  pending.length = 0;
 }
 
 export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: string): EstimateDocument {
   const pageOne = parsedPdf.pages[0];
   if (!pageOne) throw new Error("The PDF has no pages.");
 
-  const currency = detectCurrency(parsedPdf);
+  const currencies = detectCurrencies(parsedPdf);
+  const currency = currencies[0];
   const metadata: EstimateMetadata = {
     projectNumber: metadataValue(pageOne.lines, "Project Number"),
     clientName: metadataValue(pageOne.lines, "Client Name"),
@@ -181,8 +370,8 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
 
   const summary: EstimateDocument["summary"] = [];
   const optionalSummary: EstimateDocument["optionalSummary"] = [];
-  let total = 0;
-  let optionalTotal: number | undefined;
+  let totals: CurrencyAmounts = {};
+  let optionalTotals: CurrencyAmounts = {};
   let summaryStarted = false;
   let afterSummary = false;
   let optionalStarted = false;
@@ -200,21 +389,19 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
     }
 
     if (summaryStarted) {
-      const totalMatch = text.match(new RegExp(`^Total Cost\\s+(${MONEY_PATTERN})$`, "i"));
-      if (totalMatch) {
-        total = moneyToNumber(totalMatch[1]);
-        summaryStarted = false;
-        afterSummary = true;
-        continue;
+      if (/^Total Cost\b/i.test(text)) {
+        const extracted = extractAmounts(text.replace(/^Total Cost\s*/i, ""), currencies);
+        if (extracted) {
+          totals = extracted.amounts;
+          summaryStarted = false;
+          afterSummary = true;
+          continue;
+        }
       }
 
-      const rowMatch = text.match(new RegExp(`^(\\d+)\\s+(.+?)\\s+(${MONEY_PATTERN})$`));
-      if (rowMatch) {
-        summary.push({
-          number: rowMatch[1],
-          description: rowMatch[2].trim(),
-          amount: moneyToNumber(rowMatch[3]),
-        });
+      const row = parseHeading(text, currencies, false);
+      if (row) {
+        summary.push({ number: row.number, description: row.title, amount: row.amount, amounts: row.amounts });
       }
       continue;
     }
@@ -228,25 +415,26 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
     }
 
     if (optionalStarted) {
-      if (new RegExp(`^${CURRENCY_SYMBOL_PATTERN}\\s*Amount$`, "i").test(text)) continue;
-
-      const optionalTotalMatch = text.match(new RegExp(`^Optional Total(?:\\s+(${MONEY_PATTERN}))?$`, "i"));
-      if (optionalTotalMatch) {
-        optionalTotal = optionalTotalMatch[1] ? moneyToNumber(optionalTotalMatch[1]) : undefined;
+      if (/\bAmount\b/i.test(text) && currencies.some((item) => text.includes(item.label))) continue;
+      if (/^Optional Total\b/i.test(text)) {
+        const extracted = extractAmounts(text.replace(/^Optional Total\s*/i, ""), currencies);
+        optionalTotals = extracted?.amounts ?? {};
         optionalStarted = false;
         continue;
       }
 
-      const optionalRowMatch = text.match(new RegExp(`^(\\d+)\\s+(.+?)(?:\\s+(${MONEY_PATTERN}))?$`));
-      if (optionalRowMatch) {
+      const numberMatch = text.match(/^(\d+)\s+(.+)$/);
+      if (numberMatch) {
+        const extracted = extractAmounts(numberMatch[2], currencies);
+        const description = extracted ? numberMatch[2].slice(0, extracted.firstIndex).trim() : numberMatch[2].trim();
         optionalSummary.push({
-          number: optionalRowMatch[1],
-          description: optionalRowMatch[2].trim(),
-          amount: optionalRowMatch[3] ? moneyToNumber(optionalRowMatch[3]) : undefined,
+          number: numberMatch[1],
+          description,
+          amount: extracted ? primaryAmount(extracted.amounts, currencies) : undefined,
+          amounts: extracted?.amounts ?? {},
         });
         continue;
       }
-
       optionalStarted = false;
     }
 
@@ -270,6 +458,7 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
   let currentSection: EstimateSection | undefined;
   let currentSubsection: EstimateSubsection | undefined;
   let lastItem: EstimateLineItem | undefined;
+  const pendingLines: string[] = [];
   const optionalNumbers = new Set(optionalSummary.map((row) => row.number));
 
   for (const page of parsedPdf.pages) {
@@ -282,44 +471,57 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
         currentSection = undefined;
         currentSubsection = undefined;
         lastItem = undefined;
+        pendingLines.length = 0;
         continue;
       }
       if (!detailStarted) continue;
       if (isBoilerplate(line, page.height)) continue;
-      if (new RegExp(`^${CURRENCY_SYMBOL_PATTERN}\\s*Amount$`, "i").test(text)) continue;
+      if (/^Units\s+Rate$/i.test(text)) continue;
+      if (/\bAmount\b/i.test(text) && currencies.some((item) => text.includes(item.label))) continue;
 
-      const subsectionHeading = parseSubsectionHeading(text);
+      const subsectionHeading = parseHeading(text, currencies, true);
       if (subsectionHeading) {
+        flushPendingNarrative(pendingLines, currentSection, currentSubsection);
         if (!currentSection) {
           unparsedDetailLines.push(text);
           continue;
         }
-        currentSubsection = {
-          ...subsectionHeading,
-          items: [],
-          narrative: [],
-        };
+        currentSubsection = { ...subsectionHeading, items: [], narrative: [] };
         currentSection.subsections.push(currentSubsection);
         lastItem = undefined;
         continue;
       }
 
-      const sectionHeading = parseSectionHeading(text);
+      const sectionHeading = parseHeading(text, currencies, false);
       if (sectionHeading) {
-        currentSection = {
-          ...sectionHeading,
-          items: [],
-          narrative: [],
-          subsections: [],
-        };
+        flushPendingNarrative(pendingLines, currentSection, currentSubsection);
+        currentSection = { ...sectionHeading, items: [], narrative: [], subsections: [] };
         sections.push(currentSection);
         currentSubsection = undefined;
         lastItem = undefined;
         continue;
       }
 
-      const lineItem = parseLineItem(text);
+      const lineItem = parseLineItem(text, currencies);
       if (lineItem && currentSection) {
+        if (lineItem.description) {
+          if (pendingLines.length && lastItem && pendingLines.every(isBulletLine)) {
+            for (const pending of pendingLines) appendNarrative(lastItem.notes, pending);
+            pendingLines.length = 0;
+          } else {
+            flushPendingNarrative(pendingLines, currentSection, currentSubsection);
+          }
+        } else if (pendingLines.length) {
+          const firstTitleIndex = pendingLines.findIndex((value) => !isBulletLine(value));
+          if (firstTitleIndex >= 0) {
+            lineItem.description = pendingLines[firstTitleIndex];
+            const notes = pendingLines.filter((_, index) => index !== firstTitleIndex);
+            for (const note of notes) appendNarrative(lineItem.notes, note);
+            pendingLines.length = 0;
+          }
+        }
+
+        if (!lineItem.description) lineItem.description = "Line item";
         if (currentSubsection) currentSubsection.items.push(lineItem);
         else currentSection.items.push(lineItem);
         lastItem = lineItem;
@@ -327,37 +529,38 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
       }
 
       if (/^\d+$/.test(text) && optionalNumbers.has(text)) {
+        pendingLines.length = 0;
         lastItem = undefined;
         continue;
       }
 
       if (currentSection) {
-        if (lastItem) {
-          appendNarrative(lastItem.notes, text);
-        } else if (currentSubsection) {
-          appendNarrative(currentSubsection.narrative, text);
-        } else {
-          appendNarrative(currentSection.narrative, text);
-        }
+        appendNarrative(pendingLines, text);
         continue;
       }
 
-      if (!/^(Cost Estimate Detail)$/i.test(text)) {
-        unparsedDetailLines.push(text);
-      }
+      if (!/^(Cost Estimate Detail)$/i.test(text)) unparsedDetailLines.push(text);
     }
   }
+
+  flushPendingNarrative(pendingLines, currentSection, currentSubsection);
+
+  const total = primaryAmount(totals, currencies);
+  const optionalTotal = optionalTotals[currency.id];
 
   return {
     sourceFileName,
     currency,
+    currencies,
     metadata,
     companyHeaderLines,
     footerLegalLines,
     summary,
     total,
+    totals,
     optionalSummary,
     optionalTotal,
+    optionalTotals,
     notes,
     exclusions,
     sections,
@@ -372,48 +575,49 @@ function near(a: number, b: number, tolerance = 0.02): boolean {
 export function validateEstimate(document: EstimateDocument): ValidationCheck[] {
   const checks: ValidationCheck[] = [];
   const metadataFound = Object.values(document.metadata).filter(Boolean).length;
-  checks.push({
-    label: "Project metadata",
-    ok: metadataFound >= 5,
-    value: `${metadataFound}/6 fields`,
-  });
+  checks.push({ label: "Project metadata", ok: metadataFound >= 5, value: `${metadataFound}/6 fields` });
 
   checks.push({
-    label: "Currency",
-    ok: Boolean(document.currency.symbol),
-    value: document.currency.code,
+    label: "Displayed currencies",
+    ok: document.currencies.length > 0,
+    value: document.currencies.map((currency) => currency.label).join(" + "),
   });
 
-  checks.push({
-    label: "Summary categories",
-    ok: document.summary.length > 0,
-    value: String(document.summary.length),
-  });
+  checks.push({ label: "Summary categories", ok: document.summary.length > 0, value: String(document.summary.length) });
 
-  const summarySum = document.summary.reduce((sum, row) => sum + row.amount, 0);
-  checks.push({
-    label: "Summary total",
-    ok: document.total > 0 && near(summarySum, document.total),
-    value: formatEstimateMoney(document.total, document.currency),
-    detail: `Rows sum to ${formatEstimateMoney(summarySum, document.currency)}`,
-  });
+  for (const displayCurrency of document.currencies) {
+    const rowValues = document.summary.map((row) => row.amounts[displayCurrency.id]).filter((value) => value !== undefined);
+    const summarySum = rowValues.reduce((sum, value) => sum + value, 0);
+    const total = document.totals[displayCurrency.id];
+    const tolerance = displayCurrency.id === document.currency.id ? 0.02 : 0.15;
+    checks.push({
+      label: `Summary total (${displayCurrency.label})`,
+      ok: total !== undefined && rowValues.length === document.summary.length && near(summarySum, total, tolerance),
+      value: total === undefined ? "Missing" : formatEstimateMoney(total, displayCurrency),
+      detail: `Rows sum to ${formatEstimateMoney(summarySum, displayCurrency)}`,
+    });
+  }
 
-  const sectionSum = document.sections.reduce((sum, section) => sum + section.amount, 0);
-  checks.push({
-    label: "Detail categories",
-    ok: document.sections.length > 0 && near(sectionSum, document.total),
-    value: `${document.sections.length} sections`,
-    detail: `Section totals sum to ${formatEstimateMoney(sectionSum, document.currency)}`,
-  });
+  for (const displayCurrency of document.currencies) {
+    const sectionValues = document.sections.map((section) => section.amounts[displayCurrency.id]).filter((value) => value !== undefined);
+    const sectionSum = sectionValues.reduce((sum, value) => sum + value, 0);
+    const total = document.totals[displayCurrency.id];
+    const tolerance = displayCurrency.id === document.currency.id ? 0.02 : 0.15;
+    checks.push({
+      label: `Detail categories (${displayCurrency.label})`,
+      ok: document.sections.length > 0 && total !== undefined && sectionValues.length === document.sections.length && near(sectionSum, total, tolerance),
+      value: `${document.sections.length} sections`,
+      detail: `Section totals sum to ${formatEstimateMoney(sectionSum, displayCurrency)}`,
+    });
+  }
 
   for (const section of document.sections) {
     const directItemsTotal = section.items.reduce((sum, item) => sum + item.amount, 0);
     const subsectionTotal = section.subsections.reduce((sum, subsection) => sum + subsection.amount, 0);
     const childTotal = directItemsTotal + subsectionTotal;
-
     checks.push({
       label: `${section.number} ${section.title}`,
-      ok: near(childTotal, section.amount),
+      ok: near(childTotal, section.amount, 0.05),
       value: formatEstimateMoney(section.amount, document.currency),
       detail: `Parsed children total ${formatEstimateMoney(childTotal, document.currency)}`,
     });
@@ -423,10 +627,7 @@ export function validateEstimate(document: EstimateDocument): ValidationCheck[] 
     label: "Unparsed detail lines",
     ok: document.unparsedDetailLines.length === 0,
     value: String(document.unparsedDetailLines.length),
-    detail:
-      document.unparsedDetailLines.length > 0
-        ? document.unparsedDetailLines.slice(0, 3).join(" | ")
-        : undefined,
+    detail: document.unparsedDetailLines.length ? document.unparsedDetailLines.slice(0, 3).join(" | ") : undefined,
   });
 
   return checks;

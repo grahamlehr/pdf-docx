@@ -18,7 +18,7 @@ import {
   WidthType,
 } from "docx";
 import { formatEstimateMoney } from "./parser";
-import type { EstimateDocument, EstimateLineItem } from "./types";
+import type { EstimateCurrency, EstimateDocument, EstimateLineItem } from "./types";
 
 const PAGE_WIDTH = 11906;
 const PAGE_HEIGHT = 16838;
@@ -38,8 +38,8 @@ const NO_BORDERS = {
   insideVertical: { style: BorderStyle.NONE, size: 0, color: WHITE },
 };
 
-function money(document: EstimateDocument, value: number): string {
-  return formatEstimateMoney(value, document.currency);
+function money(document: EstimateDocument, value: number, currency: EstimateCurrency = document.currency): string {
+  return formatEstimateMoney(value, currency);
 }
 
 function text(
@@ -239,25 +239,59 @@ function metadataTable(document: EstimateDocument): Table {
   });
 }
 
+function currencyColumnWidths(document: EstimateDocument, totalWidth: number): number[] {
+  const count = Math.max(1, document.currencies.length);
+  const each = Math.floor(totalWidth / count);
+  const widths = Array.from({ length: count }, () => each);
+  widths[widths.length - 1] += totalWidth - widths.reduce((sum, value) => sum + value, 0);
+  return widths;
+}
+
+function currencyHeaderCells(document: EstimateDocument, widths: number[], fill: string): TableCell[] {
+  return document.currencies.map((currency, index) =>
+    cell(
+      [paragraph(`${currency.label} Amount`, { color: fill === BLACK ? WHITE : BLACK, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+      widths[index],
+      { fill },
+    ),
+  );
+}
+
+function currencyAmountCells(
+  document: EstimateDocument,
+  amounts: Record<string, number>,
+  widths: number[],
+  options: { fill?: string; bold?: boolean; color?: string } = {},
+): TableCell[] {
+  return document.currencies.map((currency, index) => {
+    const value = amounts[currency.id];
+    return cell(
+      [paragraph(value === undefined ? "" : money(document, value, currency), {
+        size: 15,
+        bold: options.bold,
+        color: options.color,
+        alignment: AlignmentType.RIGHT,
+      })],
+      widths[index],
+      options.fill ? { fill: options.fill } : {},
+    );
+  });
+}
+
 function summaryTable(document: EstimateDocument): Table {
   const numberWidth = 650;
-  const amountWidth = 1700;
-  const descriptionWidth = CONTENT_WIDTH - numberWidth - amountWidth;
-  const widths = [numberWidth, descriptionWidth, amountWidth];
+  const totalCurrencyWidth = Math.min(3600, 1450 * document.currencies.length);
+  const amountWidths = currencyColumnWidths(document, totalCurrencyWidth);
+  const descriptionWidth = CONTENT_WIDTH - numberWidth - totalCurrencyWidth;
+  const widths = [numberWidth, descriptionWidth, ...amountWidths];
   const rows: TableRow[] = [];
 
   rows.push(
     new TableRow({
       children: [
         cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
-        cell([paragraph("Cost Estimate Summary", { color: WHITE, bold: true, size: 15 })], descriptionWidth, {
-          fill: BLACK,
-        }),
-        cell(
-          [paragraph(`${document.currency.symbol} Amount`, { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
-          amountWidth,
-          { fill: BLACK },
-        ),
+        cell([paragraph("Cost Estimate Summary", { color: WHITE, bold: true, size: 15 })], descriptionWidth, { fill: BLACK }),
+        ...currencyHeaderCells(document, amountWidths, BLACK),
       ],
     }),
   );
@@ -268,7 +302,7 @@ function summaryTable(document: EstimateDocument): Table {
         children: [
           cell([paragraph(row.number, { size: 15 })], numberWidth),
           cell([paragraph(row.description, { size: 15 })], descriptionWidth),
-          cell([paragraph(money(document, row.amount), { size: 15, alignment: AlignmentType.RIGHT })], amountWidth),
+          ...currencyAmountCells(document, row.amounts, amountWidths),
         ],
       }),
     );
@@ -279,11 +313,7 @@ function summaryTable(document: EstimateDocument): Table {
       children: [
         cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
         cell([paragraph("Total Cost", { color: WHITE, bold: true, size: 15 })], descriptionWidth, { fill: BLACK }),
-        cell(
-          [paragraph(money(document, document.total), { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
-          amountWidth,
-          { fill: BLACK },
-        ),
+        ...currencyAmountCells(document, document.totals, amountWidths, { fill: BLACK, bold: true, color: WHITE }),
       ],
     }),
   );
@@ -295,21 +325,16 @@ function optionalSummaryTable(document: EstimateDocument): Table | undefined {
   if (!document.optionalSummary.length) return undefined;
 
   const numberWidth = 650;
-  const amountWidth = 1700;
-  const descriptionWidth = CONTENT_WIDTH - numberWidth - amountWidth;
-  const widths = [numberWidth, descriptionWidth, amountWidth];
+  const totalCurrencyWidth = Math.min(3600, 1450 * document.currencies.length);
+  const amountWidths = currencyColumnWidths(document, totalCurrencyWidth);
+  const descriptionWidth = CONTENT_WIDTH - numberWidth - totalCurrencyWidth;
+  const widths = [numberWidth, descriptionWidth, ...amountWidths];
   const rows: TableRow[] = [
     new TableRow({
       children: [
         cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
-        cell([paragraph("Optional (not included in Project Total)", { color: WHITE, bold: true, size: 15 })], descriptionWidth, {
-          fill: BLACK,
-        }),
-        cell(
-          [paragraph(`${document.currency.symbol} Amount`, { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
-          amountWidth,
-          { fill: BLACK },
-        ),
+        cell([paragraph("Optional (not included in Project Total)", { color: WHITE, bold: true, size: 15 })], descriptionWidth, { fill: BLACK }),
+        ...currencyHeaderCells(document, amountWidths, BLACK),
       ],
     }),
   ];
@@ -320,10 +345,7 @@ function optionalSummaryTable(document: EstimateDocument): Table | undefined {
         children: [
           cell([paragraph(row.number, { size: 15 })], numberWidth),
           cell([paragraph(row.description, { size: 15 })], descriptionWidth),
-          cell(
-            [paragraph(row.amount === undefined ? "" : money(document, row.amount), { size: 15, alignment: AlignmentType.RIGHT })],
-            amountWidth,
-          ),
+          ...currencyAmountCells(document, row.amounts, amountWidths),
         ],
       }),
     );
@@ -334,16 +356,7 @@ function optionalSummaryTable(document: EstimateDocument): Table | undefined {
       children: [
         cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
         cell([paragraph("Optional Total", { color: WHITE, bold: true, size: 15 })], descriptionWidth, { fill: BLACK }),
-        cell(
-          [paragraph(document.optionalTotal === undefined ? "" : money(document, document.optionalTotal), {
-            color: WHITE,
-            bold: true,
-            size: 15,
-            alignment: AlignmentType.RIGHT,
-          })],
-          amountWidth,
-          { fill: BLACK },
-        ),
+        ...currencyAmountCells(document, document.optionalTotals, amountWidths, { fill: BLACK, bold: true, color: WHITE }),
       ],
     }),
   );
@@ -351,99 +364,104 @@ function optionalSummaryTable(document: EstimateDocument): Table | undefined {
   return table(rows, widths);
 }
 
-function detailHeaderRow(document: EstimateDocument): TableRow {
-  const widths = [650, 5850, 2650, CONTENT_WIDTH - 9150];
+function detailWidths(document: EstimateDocument): { all: number[]; number: number; description: number; rate: number; amounts: number[] } {
+  const number = 650;
+  const rate = document.currencies.length > 1 ? 2050 : 2650;
+  const amountTotal = Math.min(3300, 1350 * document.currencies.length);
+  const amounts = currencyColumnWidths(document, amountTotal);
+  const description = CONTENT_WIDTH - number - rate - amountTotal;
+  return { all: [number, description, rate, ...amounts], number, description, rate, amounts };
+}
+
+function detailHeaderRow(document: EstimateDocument, widths = detailWidths(document)): TableRow {
   return new TableRow({
     children: [
-      cell([paragraph("", { color: WHITE })], widths[0], { fill: BLACK }),
-      cell([paragraph("Cost Estimate Detail", { color: WHITE, bold: true, size: 15 })], widths[1], { fill: BLACK }),
-      cell([paragraph("", { color: WHITE })], widths[2], { fill: BLACK }),
-      cell(
-        [paragraph(`${document.currency.symbol} Amount`, { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
-        widths[3],
-        { fill: BLACK },
-      ),
+      cell([paragraph("", { color: WHITE })], widths.number, { fill: BLACK }),
+      cell([paragraph("Cost Estimate Detail", { color: WHITE, bold: true, size: 15 })], widths.description, { fill: BLACK }),
+      cell([paragraph("", { color: WHITE })], widths.rate, { fill: BLACK }),
+      ...currencyHeaderCells(document, widths.amounts, BLACK),
     ],
   });
 }
 
-function detailLineItemRow(document: EstimateDocument, item: EstimateLineItem, widths: number[]): TableRow {
+function detailLineItemRow(
+  document: EstimateDocument,
+  item: EstimateLineItem,
+  widths: ReturnType<typeof detailWidths>,
+): TableRow {
   const descriptionParagraphs = [paragraph(item.description, { size: 15 })];
-  for (const note of item.notes) {
-    descriptionParagraphs.push(paragraph(note, { size: 14 }));
-  }
+  for (const note of item.notes) descriptionParagraphs.push(paragraph(note, { size: 14 }));
 
   return new TableRow({
     children: [
-      cell([paragraph("")], widths[0]),
-      cell(descriptionParagraphs, widths[1]),
+      cell([paragraph("")], widths.number),
+      cell(descriptionParagraphs, widths.description),
       cell(
         [paragraph(`${item.quantity.toFixed(2)} ${item.unit} @ ${money(document, item.rate)}`, { size: 15, alignment: AlignmentType.RIGHT })],
-        widths[2],
+        widths.rate,
         { verticalAlign: VerticalAlign.TOP },
       ),
-      cell([paragraph(money(document, item.amount), { size: 15, alignment: AlignmentType.RIGHT })], widths[3], {
-        verticalAlign: VerticalAlign.TOP,
-      }),
+      ...document.currencies.map((currency, index) =>
+        cell(
+          [paragraph(item.amounts[currency.id] === undefined ? "" : money(document, item.amounts[currency.id], currency), {
+            size: 15,
+            alignment: AlignmentType.RIGHT,
+          })],
+          widths.amounts[index],
+          { verticalAlign: VerticalAlign.TOP },
+        ),
+      ),
     ],
   });
 }
 
-function detailNarrativeRow(value: string, widths: number[]): TableRow {
+function detailNarrativeRow(document: EstimateDocument, value: string, widths: ReturnType<typeof detailWidths>): TableRow {
   return new TableRow({
     children: [
-      cell([paragraph("")], widths[0]),
-      cell([paragraph(value, { size: 14 })], widths[1]),
-      cell([paragraph("")], widths[2]),
-      cell([paragraph("")], widths[3]),
+      cell([paragraph("")], widths.number),
+      cell([paragraph(value, { size: 14 })], widths.description),
+      cell([paragraph("")], widths.rate),
+      ...document.currencies.map((_, index) => cell([paragraph("")], widths.amounts[index])),
     ],
   });
 }
 
 function detailTable(document: EstimateDocument): Table {
-  const widths = [650, 5850, 2650, CONTENT_WIDTH - 9150];
-  const rows: TableRow[] = [detailHeaderRow(document)];
+  const widths = detailWidths(document);
+  const rows: TableRow[] = [detailHeaderRow(document, widths)];
 
   for (const section of document.sections) {
     rows.push(
       new TableRow({
         children: [
-          cell([paragraph(section.number, { color: WHITE, bold: true, size: 15 })], widths[0], { fill: BLACK }),
-          cell([paragraph(section.title, { color: WHITE, bold: true, size: 15 })], widths[1], { fill: BLACK }),
-          cell([paragraph("", { color: WHITE })], widths[2], { fill: BLACK }),
-          cell(
-            [paragraph(money(document, section.amount), { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
-            widths[3],
-            { fill: BLACK },
-          ),
+          cell([paragraph(section.number, { color: WHITE, bold: true, size: 15 })], widths.number, { fill: BLACK }),
+          cell([paragraph(section.title, { color: WHITE, bold: true, size: 15 })], widths.description, { fill: BLACK }),
+          cell([paragraph("", { color: WHITE })], widths.rate, { fill: BLACK }),
+          ...currencyAmountCells(document, section.amounts, widths.amounts, { fill: BLACK, bold: true, color: WHITE }),
         ],
       }),
     );
 
-    for (const narrative of section.narrative) rows.push(detailNarrativeRow(narrative, widths));
+    for (const narrative of section.narrative) rows.push(detailNarrativeRow(document, narrative, widths));
     for (const item of section.items) rows.push(detailLineItemRow(document, item, widths));
 
     for (const subsection of section.subsections) {
       rows.push(
         new TableRow({
           children: [
-            cell([paragraph(subsection.number, { bold: true, size: 15 })], widths[0], { fill: GREY }),
-            cell([paragraph(subsection.title, { bold: true, size: 15 })], widths[1], { fill: GREY }),
-            cell([paragraph("")], widths[2], { fill: GREY }),
-            cell(
-              [paragraph(money(document, subsection.amount), { bold: true, size: 15, alignment: AlignmentType.RIGHT })],
-              widths[3],
-              { fill: GREY },
-            ),
+            cell([paragraph(subsection.number, { bold: true, size: 15 })], widths.number, { fill: GREY }),
+            cell([paragraph(subsection.title, { bold: true, size: 15 })], widths.description, { fill: GREY }),
+            cell([paragraph("")], widths.rate, { fill: GREY }),
+            ...currencyAmountCells(document, subsection.amounts, widths.amounts, { fill: GREY, bold: true }),
           ],
         }),
       );
-      for (const narrative of subsection.narrative) rows.push(detailNarrativeRow(narrative, widths));
+      for (const narrative of subsection.narrative) rows.push(detailNarrativeRow(document, narrative, widths));
       for (const item of subsection.items) rows.push(detailLineItemRow(document, item, widths));
     }
   }
 
-  return table(rows, widths);
+  return table(rows, widths.all);
 }
 
 function buildBody(document: EstimateDocument): Array<Paragraph | Table> {

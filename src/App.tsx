@@ -88,8 +88,10 @@ function ItemDescription({ item }: { item: EstimateLineItem }) {
 }
 
 function WordPreview({ estimate }: { estimate: EstimateDocument }) {
-  const amountHeading = `${estimate.currency.symbol} Amount`;
-  const money = (value: number) => formatEstimateMoney(value, estimate.currency);
+  const currencies = estimate.currencies;
+  const money = (value: number, currency = estimate.currency) => formatEstimateMoney(value, currency);
+  const summaryGrid = { gridTemplateColumns: `44px minmax(0, 1fr) repeat(${currencies.length}, 104px)` };
+  const detailGrid = { gridTemplateColumns: `44px minmax(0, 1fr) 180px repeat(${currencies.length}, 104px)` };
 
   return (
     <div className="word-preview-stack">
@@ -113,24 +115,54 @@ function WordPreview({ estimate }: { estimate: EstimateDocument }) {
         </dl>
 
         <div className="estimate-table summary-table">
-          <div className="table-row black-row table-header"><span></span><span>Cost Estimate Summary</span><span>{amountHeading}</span></div>
+          <div className="table-row black-row table-header" style={summaryGrid}>
+            <span></span><span>Cost Estimate Summary</span>
+            {currencies.map((currency) => <span className="currency-value" key={currency.id}>{currency.label} Amount</span>)}
+          </div>
           {estimate.summary.map((row) => (
-            <div className="table-row" key={row.number}>
-              <span>{row.number}</span><span>{row.description}</span><span>{money(row.amount)}</span>
+            <div className="table-row" style={summaryGrid} key={row.number}>
+              <span>{row.number}</span><span>{row.description}</span>
+              {currencies.map((currency) => (
+                <span className="currency-value" key={currency.id}>
+                  {row.amounts[currency.id] === undefined ? "" : money(row.amounts[currency.id], currency)}
+                </span>
+              ))}
             </div>
           ))}
-          <div className="table-row black-row total-row"><span></span><span>Total Cost</span><span>{money(estimate.total)}</span></div>
+          <div className="table-row black-row total-row" style={summaryGrid}>
+            <span></span><span>Total Cost</span>
+            {currencies.map((currency) => (
+              <span className="currency-value" key={currency.id}>
+                {estimate.totals[currency.id] === undefined ? "" : money(estimate.totals[currency.id], currency)}
+              </span>
+            ))}
+          </div>
         </div>
 
         {estimate.optionalSummary.length > 0 && (
           <div className="estimate-table summary-table">
-            <div className="table-row black-row table-header"><span></span><span>Optional (not included in Project Total)</span><span>{amountHeading}</span></div>
+            <div className="table-row black-row table-header" style={summaryGrid}>
+              <span></span><span>Optional (not included in Project Total)</span>
+              {currencies.map((currency) => <span className="currency-value" key={currency.id}>{currency.label} Amount</span>)}
+            </div>
             {estimate.optionalSummary.map((row) => (
-              <div className="table-row" key={`optional-${row.number}`}>
-                <span>{row.number}</span><span>{row.description}</span><span>{row.amount === undefined ? "" : money(row.amount)}</span>
+              <div className="table-row" style={summaryGrid} key={`optional-${row.number}`}>
+                <span>{row.number}</span><span>{row.description}</span>
+                {currencies.map((currency) => (
+                  <span className="currency-value" key={currency.id}>
+                    {row.amounts[currency.id] === undefined ? "" : money(row.amounts[currency.id], currency)}
+                  </span>
+                ))}
               </div>
             ))}
-            <div className="table-row black-row total-row"><span></span><span>Optional Total</span><span>{estimate.optionalTotal === undefined ? "" : money(estimate.optionalTotal)}</span></div>
+            <div className="table-row black-row total-row" style={summaryGrid}>
+              <span></span><span>Optional Total</span>
+              {currencies.map((currency) => (
+                <span className="currency-value" key={currency.id}>
+                  {estimate.optionalTotals[currency.id] === undefined ? "" : money(estimate.optionalTotals[currency.id], currency)}
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
@@ -142,35 +174,60 @@ function WordPreview({ estimate }: { estimate: EstimateDocument }) {
 
       <article className="word-page detail-page">
         <div className="estimate-table detail-table">
-          <div className="detail-row black-row table-header"><span></span><span>Cost Estimate Detail</span><span></span><span>{amountHeading}</span></div>
+          <div className="detail-row black-row table-header" style={detailGrid}>
+            <span></span><span>Cost Estimate Detail</span><span></span>
+            {currencies.map((currency) => <span className="currency-value" key={currency.id}>{currency.label} Amount</span>)}
+          </div>
           {estimate.sections.map((section) => (
             <div className="detail-section" key={section.number}>
-              <div className="detail-row black-row section-row">
-                <span>{section.number}</span><span>{section.title}</span><span></span><span>{money(section.amount)}</span>
+              <div className="detail-row black-row section-row" style={detailGrid}>
+                <span>{section.number}</span><span>{section.title}</span><span></span>
+                {currencies.map((currency) => (
+                  <span className="currency-value" key={currency.id}>
+                    {section.amounts[currency.id] === undefined ? "" : money(section.amounts[currency.id], currency)}
+                  </span>
+                ))}
               </div>
               {section.narrative.map((line, index) => (
-                <div className="detail-row" key={`${section.number}-narrative-${index}`}>
-                  <span></span><span>{line}</span><span></span><span></span>
+                <div className="detail-row" style={detailGrid} key={`${section.number}-narrative-${index}`}>
+                  <span></span><span>{line}</span><span></span>{currencies.map((currency) => <span key={currency.id}></span>)}
                 </div>
               ))}
               {section.items.map((item, index) => (
-                <div className="detail-row" key={`${section.number}-item-${index}`}>
-                  <span></span><ItemDescription item={item} /><span>{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span><span>{money(item.amount)}</span>
+                <div className="detail-row" style={detailGrid} key={`${section.number}-item-${index}`}>
+                  <span></span><ItemDescription item={item} />
+                  <span className="currency-value">{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span>
+                  {currencies.map((currency) => (
+                    <span className="currency-value" key={currency.id}>
+                      {item.amounts[currency.id] === undefined ? "" : money(item.amounts[currency.id], currency)}
+                    </span>
+                  ))}
                 </div>
               ))}
               {section.subsections.map((subsection) => (
                 <div className="detail-subsection" key={subsection.number}>
-                  <div className="detail-row grey-row subsection-row">
-                    <span>{subsection.number}</span><span>{subsection.title}</span><span></span><span>{money(subsection.amount)}</span>
+                  <div className="detail-row grey-row subsection-row" style={detailGrid}>
+                    <span>{subsection.number}</span><span>{subsection.title}</span><span></span>
+                    {currencies.map((currency) => (
+                      <span className="currency-value" key={currency.id}>
+                        {subsection.amounts[currency.id] === undefined ? "" : money(subsection.amounts[currency.id], currency)}
+                      </span>
+                    ))}
                   </div>
                   {subsection.narrative.map((line, index) => (
-                    <div className="detail-row" key={`${subsection.number}-narrative-${index}`}>
-                      <span></span><span>{line}</span><span></span><span></span>
+                    <div className="detail-row" style={detailGrid} key={`${subsection.number}-narrative-${index}`}>
+                      <span></span><span>{line}</span><span></span>{currencies.map((currency) => <span key={currency.id}></span>)}
                     </div>
                   ))}
                   {subsection.items.map((item, index) => (
-                    <div className="detail-row" key={`${subsection.number}-item-${index}`}>
-                      <span></span><ItemDescription item={item} /><span>{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span><span>{money(item.amount)}</span>
+                    <div className="detail-row" style={detailGrid} key={`${subsection.number}-item-${index}`}>
+                      <span></span><ItemDescription item={item} />
+                      <span className="currency-value">{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span>
+                      {currencies.map((currency) => (
+                        <span className="currency-value" key={currency.id}>
+                          {item.amounts[currency.id] === undefined ? "" : money(item.amounts[currency.id], currency)}
+                        </span>
+                      ))}
                     </div>
                   ))}
                 </div>
@@ -269,8 +326,8 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <p className="eyebrow">Estimate converter</p>
-            <h1>Turn a PDF cost estimate into an editable Word document.</h1>
+            <p className="eyebrow">Procim estimate converter</p>
+            <h3>Turn a PDF cost estimate into an editable Word document.</h3>
           </div>
           {estimate && (
             <div className="hero-actions">
@@ -302,7 +359,7 @@ export default function App() {
             />
             <div className="drop-icon"><Icon name="upload" /></div>
             <h2>{status === "reading" ? "Reading estimate..." : "Drop an estimate PDF here"}</h2>
-            <p>{status === "reading" ? "Extracting text, layout, page previews and logo." : "Supports the Procim cost-estimate family, with GBP, EUR and USD estimates."}</p>
+            <p>{status === "reading" ? "Extracting text, layout, page previews and logo." : "Supports the Procim cost-estimate family, with automatic currency detection and multi-currency estimates."}</p>
             <button className="button primary" disabled={status === "reading"} onClick={() => fileInputRef.current?.click()}>
               <Icon name="file" /> Choose PDF
             </button>
@@ -340,7 +397,7 @@ export default function App() {
                 <dl className="fact-list">
                   <div><dt>Project</dt><dd>{estimate.metadata.projectName || "Not found"}</dd></div>
                   <div><dt>Client</dt><dd>{estimate.metadata.clientName || "Not found"}</dd></div>
-                  <div><dt>Currency</dt><dd>{estimate.currency.code}</dd></div>
+                  <div><dt>Currencies</dt><dd>{estimate.currencies.map((currency) => currency.label).join(" + ")}</dd></div>
                   <div><dt>Categories</dt><dd>{estimate.sections.length}</dd></div>
                   <div><dt>Total</dt><dd>{formatEstimateMoney(estimate.total, estimate.currency)}</dd></div>
                 </dl>
@@ -349,7 +406,7 @@ export default function App() {
 
               <section className="panel privacy-panel">
                 <div className="mini-icon"><Icon name="lock" /></div>
-                <div><strong>Local-only processing</strong><p>The PDF is read and the DOCX is created in your browser. No data is sent to the cloud.</p></div>
+                <div><strong>Local-only processing</strong><p>The PDF is read with PDF.js and the DOCX is created in-browser. There is no app server in this project.</p></div>
               </section>
             </aside>
           </div>
@@ -357,7 +414,7 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        <span>V1.1</span>
+        <span>V1.2</span>
         <span>grahamlehr.github.io</span>
       </footer>
     </div>
