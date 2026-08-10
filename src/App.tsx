@@ -1,20 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { buildEstimateDocument, validateEstimate } from "./parser";
+import { buildEstimateDocument, formatEstimateMoney, validateEstimate } from "./parser";
 import { parsePdfFile } from "./pdf";
 import { generateEstimateDocx, suggestedDocxName } from "./docxGenerator";
-import type { EstimateDocument, ParsedPdf, ValidationCheck } from "./types";
+import type { EstimateDocument, EstimateLineItem, ParsedPdf, ValidationCheck } from "./types";
 import "./styles.css";
 
 type Status = "idle" | "reading" | "ready" | "generating" | "error";
-
-function formatMoney(value: number): string {
-  return new Intl.NumberFormat("en-GB", {
-    style: "currency",
-    currency: "GBP",
-    minimumFractionDigits: 2,
-  }).format(value);
-}
 
 function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
@@ -84,7 +76,21 @@ function PdfPreview({ parsedPdf }: { parsedPdf: ParsedPdf }) {
   );
 }
 
+function ItemDescription({ item }: { item: EstimateLineItem }) {
+  return (
+    <span>
+      {item.description}
+      {item.notes.map((note, index) => (
+        <span key={`${note}-${index}`}><br /><small>{note}</small></span>
+      ))}
+    </span>
+  );
+}
+
 function WordPreview({ estimate }: { estimate: EstimateDocument }) {
+  const amountHeading = `${estimate.currency.symbol} Amount`;
+  const money = (value: number) => formatEstimateMoney(value, estimate.currency);
+
   return (
     <div className="word-preview-stack">
       <article className="word-page">
@@ -107,42 +113,64 @@ function WordPreview({ estimate }: { estimate: EstimateDocument }) {
         </dl>
 
         <div className="estimate-table summary-table">
-          <div className="table-row black-row table-header"><span></span><span>Cost Estimate Summary</span><span>£ Amount</span></div>
+          <div className="table-row black-row table-header"><span></span><span>Cost Estimate Summary</span><span>{amountHeading}</span></div>
           {estimate.summary.map((row) => (
             <div className="table-row" key={row.number}>
-              <span>{row.number}</span><span>{row.description}</span><span>{formatMoney(row.amount)}</span>
+              <span>{row.number}</span><span>{row.description}</span><span>{money(row.amount)}</span>
             </div>
           ))}
-          <div className="table-row black-row total-row"><span></span><span>Total Cost</span><span>{formatMoney(estimate.total)}</span></div>
+          <div className="table-row black-row total-row"><span></span><span>Total Cost</span><span>{money(estimate.total)}</span></div>
         </div>
 
+        {estimate.optionalSummary.length > 0 && (
+          <div className="estimate-table summary-table">
+            <div className="table-row black-row table-header"><span></span><span>Optional (not included in Project Total)</span><span>{amountHeading}</span></div>
+            {estimate.optionalSummary.map((row) => (
+              <div className="table-row" key={`optional-${row.number}`}>
+                <span>{row.number}</span><span>{row.description}</span><span>{row.amount === undefined ? "" : money(row.amount)}</span>
+              </div>
+            ))}
+            <div className="table-row black-row total-row"><span></span><span>Optional Total</span><span>{estimate.optionalTotal === undefined ? "" : money(estimate.optionalTotal)}</span></div>
+          </div>
+        )}
+
         <div className="notes-block">
-          {estimate.notes.map((note) => <p key={note}>{note}</p>)}
+          {estimate.notes.map((note, index) => <p key={`${note}-${index}`}>{note}</p>)}
           {estimate.exclusions.length > 0 && <><p>Budget Exclusions:</p><ul>{estimate.exclusions.map((item) => <li key={item}>{item}</li>)}</ul></>}
         </div>
       </article>
 
       <article className="word-page detail-page">
         <div className="estimate-table detail-table">
-          <div className="detail-row black-row table-header"><span></span><span>Cost Estimate Detail</span><span></span><span>£ Amount</span></div>
+          <div className="detail-row black-row table-header"><span></span><span>Cost Estimate Detail</span><span></span><span>{amountHeading}</span></div>
           {estimate.sections.map((section) => (
             <div className="detail-section" key={section.number}>
               <div className="detail-row black-row section-row">
-                <span>{section.number}</span><span>{section.title}</span><span></span><span>{formatMoney(section.amount)}</span>
+                <span>{section.number}</span><span>{section.title}</span><span></span><span>{money(section.amount)}</span>
               </div>
+              {section.narrative.map((line, index) => (
+                <div className="detail-row" key={`${section.number}-narrative-${index}`}>
+                  <span></span><span>{line}</span><span></span><span></span>
+                </div>
+              ))}
               {section.items.map((item, index) => (
                 <div className="detail-row" key={`${section.number}-item-${index}`}>
-                  <span></span><span>{item.description}</span><span>{item.quantity.toFixed(2)} {item.unit} @ {formatMoney(item.rate)}</span><span>{formatMoney(item.amount)}</span>
+                  <span></span><ItemDescription item={item} /><span>{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span><span>{money(item.amount)}</span>
                 </div>
               ))}
               {section.subsections.map((subsection) => (
                 <div className="detail-subsection" key={subsection.number}>
                   <div className="detail-row grey-row subsection-row">
-                    <span>{subsection.number}</span><span>{subsection.title}</span><span></span><span>{formatMoney(subsection.amount)}</span>
+                    <span>{subsection.number}</span><span>{subsection.title}</span><span></span><span>{money(subsection.amount)}</span>
                   </div>
+                  {subsection.narrative.map((line, index) => (
+                    <div className="detail-row" key={`${subsection.number}-narrative-${index}`}>
+                      <span></span><span>{line}</span><span></span><span></span>
+                    </div>
+                  ))}
                   {subsection.items.map((item, index) => (
                     <div className="detail-row" key={`${subsection.number}-item-${index}`}>
-                      <span></span><span>{item.description}</span><span>{item.quantity.toFixed(2)} {item.unit} @ {formatMoney(item.rate)}</span><span>{formatMoney(item.amount)}</span>
+                      <span></span><ItemDescription item={item} /><span>{item.quantity.toFixed(2)} {item.unit} @ {money(item.rate)}</span><span>{money(item.amount)}</span>
                     </div>
                   ))}
                 </div>
@@ -187,7 +215,7 @@ export default function App() {
       const document = buildEstimateDocument(parsed, file.name);
       if (!document.summary.length || !document.sections.length) {
         throw new Error(
-          "I could read the PDF, but it does not match the Inizio cost-estimate structure this MVP is tuned for yet.",
+          "I could read the PDF, but it does not match the Inizio/Emota cost-estimate structure this converter supports yet.",
         );
       }
       setParsedPdf(parsed);
@@ -275,7 +303,7 @@ export default function App() {
             />
             <div className="drop-icon"><Icon name="upload" /></div>
             <h2>{status === "reading" ? "Reading estimate..." : "Drop an estimate PDF here"}</h2>
-            <p>{status === "reading" ? "Extracting text, layout, page previews and logo." : "This MVP is tuned for the Inizio cost-estimate layout supplied as the reference."}</p>
+            <p>{status === "reading" ? "Extracting text, layout, page previews and logo." : "Supports the Inizio/Emota cost-estimate family, including GBP and USD estimates."}</p>
             <button className="button primary" disabled={status === "reading"} onClick={() => fileInputRef.current?.click()}>
               <Icon name="file" /> Choose PDF
             </button>
@@ -313,8 +341,9 @@ export default function App() {
                 <dl className="fact-list">
                   <div><dt>Project</dt><dd>{estimate.metadata.projectName || "Not found"}</dd></div>
                   <div><dt>Client</dt><dd>{estimate.metadata.clientName || "Not found"}</dd></div>
+                  <div><dt>Currency</dt><dd>{estimate.currency.code}</dd></div>
                   <div><dt>Categories</dt><dd>{estimate.sections.length}</dd></div>
-                  <div><dt>Total</dt><dd>{formatMoney(estimate.total)}</dd></div>
+                  <div><dt>Total</dt><dd>{formatEstimateMoney(estimate.total, estimate.currency)}</dd></div>
                 </dl>
                 <button className="text-button" onClick={downloadJson}>Download parsed JSON</button>
               </section>

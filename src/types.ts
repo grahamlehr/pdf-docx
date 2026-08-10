@@ -29,6 +29,12 @@ export interface ParsedPdf {
   logoPng?: Uint8Array;
 }
 
+export interface EstimateCurrency {
+  symbol: string;
+  code: string;
+  spaceAfterSymbol: boolean;
+}
+
 export interface EstimateMetadata {
   projectNumber: string;
   clientName: string;
@@ -44,8 +50,15 @@ export interface EstimateSummaryRow {
   amount: number;
 }
 
+export interface EstimateOptionalRow {
+  number: string;
+  description: string;
+  amount?: number;
+}
+
 export interface EstimateLineItem {
   description: string;
+  notes: string[];
   quantity: number;
   unit: string;
   rate: number;
@@ -57,6 +70,7 @@ export interface EstimateSubsection {
   title: string;
   amount: number;
   items: EstimateLineItem[];
+  narrative: string[];
 }
 
 export interface EstimateSection {
@@ -64,16 +78,20 @@ export interface EstimateSection {
   title: string;
   amount: number;
   items: EstimateLineItem[];
+  narrative: string[];
   subsections: EstimateSubsection[];
 }
 
 export interface EstimateDocument {
   sourceFileName: string;
+  currency: EstimateCurrency;
   metadata: EstimateMetadata;
   companyHeaderLines: string[];
   footerLegalLines: string[];
   summary: EstimateSummaryRow[];
   total: number;
+  optionalSummary: EstimateOptionalRow[];
+  optionalTotal?: number;
   notes: string[];
   exclusions: string[];
   sections: EstimateSection[];

@@ -17,6 +17,7 @@ import {
   VerticalAlign,
   WidthType,
 } from "docx";
+import { formatEstimateMoney } from "./parser";
 import type { EstimateDocument, EstimateLineItem } from "./types";
 
 const PAGE_WIDTH = 11906;
@@ -37,12 +38,8 @@ const NO_BORDERS = {
   insideVertical: { style: BorderStyle.NONE, size: 0, color: WHITE },
 };
 
-function money(value: number): string {
-  return new Intl.NumberFormat("en-GB", {
-    style: "currency",
-    currency: "GBP",
-    minimumFractionDigits: 2,
-  }).format(value);
+function money(document: EstimateDocument, value: number): string {
+  return formatEstimateMoney(value, document.currency);
 }
 
 function text(
@@ -160,7 +157,7 @@ function createHeader(document: EstimateDocument, logoPng?: Uint8Array): Header 
 function createFooter(document: EstimateDocument): Footer {
   const legalLines = document.footerLegalLines.length
     ? document.footerLegalLines
-    : ["Inizio Engage XD Limited"];
+    : [document.companyHeaderLines[0] || "Inizio Engage XD Limited"];
 
   const legalChildren: TextRun[] = [];
   legalLines.slice(0, 16).forEach((line, index) => {
@@ -257,7 +254,7 @@ function summaryTable(document: EstimateDocument): Table {
           fill: BLACK,
         }),
         cell(
-          [paragraph("£ Amount", { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+          [paragraph(`${document.currency.symbol} Amount`, { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
           amountWidth,
           { fill: BLACK },
         ),
@@ -271,7 +268,7 @@ function summaryTable(document: EstimateDocument): Table {
         children: [
           cell([paragraph(row.number, { size: 15 })], numberWidth),
           cell([paragraph(row.description, { size: 15 })], descriptionWidth),
-          cell([paragraph(money(row.amount), { size: 15, alignment: AlignmentType.RIGHT })], amountWidth),
+          cell([paragraph(money(document, row.amount), { size: 15, alignment: AlignmentType.RIGHT })], amountWidth),
         ],
       }),
     );
@@ -283,7 +280,7 @@ function summaryTable(document: EstimateDocument): Table {
         cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
         cell([paragraph("Total Cost", { color: WHITE, bold: true, size: 15 })], descriptionWidth, { fill: BLACK }),
         cell(
-          [paragraph(money(document.total), { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+          [paragraph(money(document, document.total), { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
           amountWidth,
           { fill: BLACK },
         ),
@@ -294,37 +291,118 @@ function summaryTable(document: EstimateDocument): Table {
   return table(rows, widths);
 }
 
-function detailHeaderRow(): TableRow {
+function optionalSummaryTable(document: EstimateDocument): Table | undefined {
+  if (!document.optionalSummary.length) return undefined;
+
+  const numberWidth = 650;
+  const amountWidth = 1700;
+  const descriptionWidth = CONTENT_WIDTH - numberWidth - amountWidth;
+  const widths = [numberWidth, descriptionWidth, amountWidth];
+  const rows: TableRow[] = [
+    new TableRow({
+      children: [
+        cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
+        cell([paragraph("Optional (not included in Project Total)", { color: WHITE, bold: true, size: 15 })], descriptionWidth, {
+          fill: BLACK,
+        }),
+        cell(
+          [paragraph(`${document.currency.symbol} Amount`, { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+          amountWidth,
+          { fill: BLACK },
+        ),
+      ],
+    }),
+  ];
+
+  for (const row of document.optionalSummary) {
+    rows.push(
+      new TableRow({
+        children: [
+          cell([paragraph(row.number, { size: 15 })], numberWidth),
+          cell([paragraph(row.description, { size: 15 })], descriptionWidth),
+          cell(
+            [paragraph(row.amount === undefined ? "" : money(document, row.amount), { size: 15, alignment: AlignmentType.RIGHT })],
+            amountWidth,
+          ),
+        ],
+      }),
+    );
+  }
+
+  rows.push(
+    new TableRow({
+      children: [
+        cell([paragraph("", { color: WHITE })], numberWidth, { fill: BLACK }),
+        cell([paragraph("Optional Total", { color: WHITE, bold: true, size: 15 })], descriptionWidth, { fill: BLACK }),
+        cell(
+          [paragraph(document.optionalTotal === undefined ? "" : money(document, document.optionalTotal), {
+            color: WHITE,
+            bold: true,
+            size: 15,
+            alignment: AlignmentType.RIGHT,
+          })],
+          amountWidth,
+          { fill: BLACK },
+        ),
+      ],
+    }),
+  );
+
+  return table(rows, widths);
+}
+
+function detailHeaderRow(document: EstimateDocument): TableRow {
   const widths = [650, 5850, 2650, CONTENT_WIDTH - 9150];
   return new TableRow({
     children: [
       cell([paragraph("", { color: WHITE })], widths[0], { fill: BLACK }),
       cell([paragraph("Cost Estimate Detail", { color: WHITE, bold: true, size: 15 })], widths[1], { fill: BLACK }),
       cell([paragraph("", { color: WHITE })], widths[2], { fill: BLACK }),
-      cell([paragraph("£ Amount", { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })], widths[3], {
-        fill: BLACK,
+      cell(
+        [paragraph(`${document.currency.symbol} Amount`, { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+        widths[3],
+        { fill: BLACK },
+      ),
+    ],
+  });
+}
+
+function detailLineItemRow(document: EstimateDocument, item: EstimateLineItem, widths: number[]): TableRow {
+  const descriptionParagraphs = [paragraph(item.description, { size: 15 })];
+  for (const note of item.notes) {
+    descriptionParagraphs.push(paragraph(note, { size: 14 }));
+  }
+
+  return new TableRow({
+    children: [
+      cell([paragraph("")], widths[0]),
+      cell(descriptionParagraphs, widths[1]),
+      cell(
+        [paragraph(`${item.quantity.toFixed(2)} ${item.unit} @ ${money(document, item.rate)}`, { size: 15, alignment: AlignmentType.RIGHT })],
+        widths[2],
+        { verticalAlign: VerticalAlign.TOP },
+      ),
+      cell([paragraph(money(document, item.amount), { size: 15, alignment: AlignmentType.RIGHT })], widths[3], {
+        verticalAlign: VerticalAlign.TOP,
       }),
     ],
   });
 }
 
-function detailLineItemRow(item: EstimateLineItem, widths: number[]): TableRow {
+function detailNarrativeRow(value: string, widths: number[]): TableRow {
   return new TableRow({
     children: [
       cell([paragraph("")], widths[0]),
-      cell([paragraph(item.description, { size: 15 })], widths[1]),
-      cell(
-        [paragraph(`${item.quantity.toFixed(2)} ${item.unit} @ ${money(item.rate)}`, { size: 15, alignment: AlignmentType.RIGHT })],
-        widths[2],
-      ),
-      cell([paragraph(money(item.amount), { size: 15, alignment: AlignmentType.RIGHT })], widths[3]),
+      cell([paragraph(value, { size: 14 })], widths[1]),
+      cell([paragraph("")], widths[2]),
+      cell([paragraph("")], widths[3]),
     ],
   });
 }
 
 function detailTable(document: EstimateDocument): Table {
   const widths = [650, 5850, 2650, CONTENT_WIDTH - 9150];
-  const rows: TableRow[] = [detailHeaderRow()];
+  const rows: TableRow[] = [detailHeaderRow(document)];
 
   for (const section of document.sections) {
     rows.push(
@@ -334,7 +412,7 @@ function detailTable(document: EstimateDocument): Table {
           cell([paragraph(section.title, { color: WHITE, bold: true, size: 15 })], widths[1], { fill: BLACK }),
           cell([paragraph("", { color: WHITE })], widths[2], { fill: BLACK }),
           cell(
-            [paragraph(money(section.amount), { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+            [paragraph(money(document, section.amount), { color: WHITE, bold: true, size: 15, alignment: AlignmentType.RIGHT })],
             widths[3],
             { fill: BLACK },
           ),
@@ -342,7 +420,8 @@ function detailTable(document: EstimateDocument): Table {
       }),
     );
 
-    for (const item of section.items) rows.push(detailLineItemRow(item, widths));
+    for (const narrative of section.narrative) rows.push(detailNarrativeRow(narrative, widths));
+    for (const item of section.items) rows.push(detailLineItemRow(document, item, widths));
 
     for (const subsection of section.subsections) {
       rows.push(
@@ -352,14 +431,15 @@ function detailTable(document: EstimateDocument): Table {
             cell([paragraph(subsection.title, { bold: true, size: 15 })], widths[1], { fill: GREY }),
             cell([paragraph("")], widths[2], { fill: GREY }),
             cell(
-              [paragraph(money(subsection.amount), { bold: true, size: 15, alignment: AlignmentType.RIGHT })],
+              [paragraph(money(document, subsection.amount), { bold: true, size: 15, alignment: AlignmentType.RIGHT })],
               widths[3],
               { fill: GREY },
             ),
           ],
         }),
       );
-      for (const item of subsection.items) rows.push(detailLineItemRow(item, widths));
+      for (const narrative of subsection.narrative) rows.push(detailNarrativeRow(narrative, widths));
+      for (const item of subsection.items) rows.push(detailLineItemRow(document, item, widths));
     }
   }
 
@@ -372,6 +452,13 @@ function buildBody(document: EstimateDocument): Array<Paragraph | Table> {
   body.push(metadataTable(document));
   body.push(paragraph("", { after: 130 }));
   body.push(summaryTable(document));
+
+  const optional = optionalSummaryTable(document);
+  if (optional) {
+    body.push(paragraph("", { after: 180 }));
+    body.push(optional);
+  }
+
   body.push(paragraph("", { after: 260 }));
 
   for (const note of document.notes) {
