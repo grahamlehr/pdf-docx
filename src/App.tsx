@@ -315,13 +315,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand-wrap">
-          <div className="brand-mark">E</div>
-          <div><strong>Estimate to Word</strong><span>PDF reconstruction</span></div>
-        </div>
-        <div className="privacy-pill"><Icon name="lock" /><span>Runs locally in your browser</span></div>
-      </header>
+
 
       <main>
         <section className="hero">
