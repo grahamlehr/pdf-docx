@@ -285,8 +285,14 @@ function parseLineItem(text: string, currencies: EstimateCurrency[]): EstimateLi
 
   const left = normalized.slice(0, atIndex).trim();
   const right = normalized.slice(atIndex + 3).trim();
-  const leftMatch = left.match(/^(.*?)(\d+(?:[.,]\d+)?)\s+([A-Za-z][A-Za-z0-9 /&()._-]*)$/i);
-  if (!leftMatch) return undefined;
+  const quantityMatches = [...left.matchAll(new RegExp(NUMBER_PATTERN, "gu"))];
+  const quantityMatch = quantityMatches.at(-1);
+  if (!quantityMatch || quantityMatch.index === undefined) return undefined;
+
+  const rawQuantity = quantityMatch[0];
+  const description = left.slice(0, quantityMatch.index).trim();
+  const unit = left.slice(quantityMatch.index + rawQuantity.length).trim();
+  if (!/^[A-Za-z][A-Za-z0-9 /&()._-]*$/i.test(unit)) return undefined;
 
   const occurrences = moneyOccurrences(right, currencies);
   if (occurrences.length < 2) return undefined;
@@ -298,10 +304,10 @@ function parseLineItem(text: string, currencies: EstimateCurrency[]): EstimateLi
   if (amounts[currencies[0].id] === undefined) return undefined;
 
   return {
-    description: leftMatch[1].trim(),
+    description,
     notes: [],
-    quantity: parseLocaleNumber(leftMatch[2]),
-    unit: leftMatch[3].trim(),
+    quantity: parseLocaleNumber(rawQuantity),
+    unit,
     rate,
     amount: primaryAmount(amounts, currencies),
     amounts,
