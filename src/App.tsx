@@ -416,7 +416,7 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        <span>V1.5</span>
+        <span>V1.6</span>
         <span>grahamlehr.github.io</span>
       </footer>
     </div>

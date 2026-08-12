@@ -398,8 +398,14 @@ function flushPendingNarrative(
   pending: string[],
   currentSection: EstimateSection | undefined,
   currentSubsection: EstimateSubsection | undefined,
+  lastItem?: EstimateLineItem,
 ): void {
   if (!pending.length || !currentSection) return;
+  if (lastItem) {
+    for (const line of pending) appendNarrative(lastItem.notes, line);
+    pending.length = 0;
+    return;
+  }
   const target = currentSubsection ? currentSubsection.narrative : currentSection.narrative;
   for (const line of pending) appendNarrative(target, line);
   pending.length = 0;
@@ -545,7 +551,7 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
 
       const subsectionHeading = parseHeading(text, currencies, true);
       if (subsectionHeading) {
-        flushPendingNarrative(pendingLines, currentSection, currentSubsection);
+        flushPendingNarrative(pendingLines, currentSection, currentSubsection, lastItem);
         if (!currentSection) {
           unparsedDetailLines.push(text);
           continue;
@@ -558,7 +564,7 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
 
       const sectionHeading = parseHeading(text, currencies, false);
       if (sectionHeading) {
-        flushPendingNarrative(pendingLines, currentSection, currentSubsection);
+        flushPendingNarrative(pendingLines, currentSection, currentSubsection, lastItem);
         currentSection = { ...sectionHeading, items: [], narrative: [], subsections: [] };
         sections.push(currentSection);
         currentSubsection = undefined;
@@ -569,12 +575,7 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
       const lineItem = parseLineItem(text, currencies) ?? parseAmountOnlyLineItem(text, currencies);
       if (lineItem && currentSection) {
         if (lineItem.description) {
-          if (pendingLines.length && lastItem && pendingLines.every(isBulletLine)) {
-            for (const pending of pendingLines) appendNarrative(lastItem.notes, pending);
-            pendingLines.length = 0;
-          } else {
-            flushPendingNarrative(pendingLines, currentSection, currentSubsection);
-          }
+          flushPendingNarrative(pendingLines, currentSection, currentSubsection, lastItem);
         } else if (pendingLines.length) {
           const firstTitleIndex = pendingLines.findIndex((value) => !isBulletLine(value));
           if (firstTitleIndex >= 0) {
@@ -618,7 +619,7 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
     }
   }
 
-  flushPendingNarrative(pendingLines, currentSection, currentSubsection);
+  flushPendingNarrative(pendingLines, currentSection, currentSubsection, lastItem);
 
   const total = primaryAmount(totals, currencies);
   const optionalTotal = optionalTotals[currency.id];

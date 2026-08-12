@@ -545,6 +545,7 @@ export async function generateEstimateDocx(document: EstimateDocument, logo?: Pd
 }
 
 export function suggestedDocxName(document: EstimateDocument): string {
-  const stem = document.metadata.projectNumber || document.sourceFileName.replace(/\.pdf$/i, "") || "estimate";
-  return `${stem.replace(/[^a-z0-9-_]+/gi, "_")}.docx`;
+  const sourceStem = document.sourceFileName.replace(/\.pdf$/i, "").trim();
+  const stem = sourceStem || document.metadata.projectNumber || "estimate";
+  return `${stem.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")}.docx`;
 }
