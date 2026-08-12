@@ -11,7 +11,8 @@ import type {
   ValidationCheck,
 } from "./types";
 
-const NUMBER_PATTERN = String.raw`[-+]?(?:\d{1,3}(?:[,.'’\s]\d{3})+|\d+)(?:[.,]\d{1,4})?`;
+const UNSIGNED_NUMBER_PATTERN = String.raw`(?:\d{1,3}(?:[,.'’\s]\d{3})+|\d+)(?:[.,]\d{1,4})?`;
+const NUMBER_PATTERN = String.raw`[-+]?${UNSIGNED_NUMBER_PATTERN}`;
 
 function normalizeLine(value: string): string {
   return value
@@ -197,14 +198,25 @@ function moneyOccurrences(text: string, currencies: EstimateCurrency[]): MoneyOc
 
   for (const currency of currencies) {
     const token = escapeRegex(currency.label);
-    const patterns = [
-      new RegExp(`${token}\\s*(${NUMBER_PATTERN})`, "giu"),
-      new RegExp(`(${NUMBER_PATTERN})\\s*${token}`, "giu"),
-    ];
+    const patterns = currency.position === "prefix"
+      ? [{
+        pattern: new RegExp(`([-+]?)\\s*${token}\\s*([-+]?)\\s*(${UNSIGNED_NUMBER_PATTERN})`, "giu"),
+        prefix: true,
+      }]
+      : [{
+        pattern: new RegExp(`([-+]?)\\s*(${UNSIGNED_NUMBER_PATTERN})\\s*${token}`, "giu"),
+        prefix: false,
+      }];
 
-    for (const pattern of patterns) {
+    for (const { pattern, prefix } of patterns) {
       for (const match of text.matchAll(pattern)) {
-        const rawNumber = match[1];
+        const leadingSign = match[1] ?? "";
+        const innerSign = prefix ? match[2] ?? "" : "";
+        const unsignedNumber = prefix ? match[3] : match[2];
+        const sign = leadingSign === "-" || innerSign === "-"
+          ? "-"
+          : leadingSign === "+" || innerSign === "+" ? "+" : "";
+        const rawNumber = `${sign}${unsignedNumber}`;
         const index = match.index ?? 0;
         occurrences.push({
           currency,
@@ -247,13 +259,15 @@ function metadataValue(lines: PdfLine[], label: string): string {
     let parenthesisBalance = (value.match(/\(/g)?.length ?? 0) - (value.match(/\)/g)?.length ?? 0);
     let previousY = line.y;
 
-    // Project names occasionally wrap inside a parenthetical suffix. Continue
-    // only while that suffix is open and the next visual line is close by.
-    for (let nextIndex = index + 1; parenthesisBalance > 0 && nextIndex < lines.length; nextIndex += 1) {
+    // Metadata values can wrap beneath the value column, sometimes without an
+    // open parenthesis (for example a trailing "Costs ONLY").
+    for (let nextIndex = index + 1; nextIndex < lines.length; nextIndex += 1) {
       const nextLine = lines[nextIndex];
       if (nextLine.y - previousY > 24) break;
       const continuation = normalizeLine(nextLine.text);
       if (!continuation || /^(?:Project Number|Client Name|Project Name|Event\/Completion|Costing Version|Date)\s*:/i.test(continuation)) break;
+      const isIndentedContinuation = nextLine.x > line.x + 50;
+      if (parenthesisBalance <= 0 && !isIndentedContinuation) break;
       value = `${value} ${continuation}`;
       parenthesisBalance += (continuation.match(/\(/g)?.length ?? 0) - (continuation.match(/\)/g)?.length ?? 0);
       previousY = nextLine.y;
@@ -295,10 +309,12 @@ function parseLineItem(text: string, currencies: EstimateCurrency[]): EstimateLi
   if (!/^[A-Za-z][A-Za-z0-9 /&()._-]*$/i.test(unit)) return undefined;
 
   const occurrences = moneyOccurrences(right, currencies);
-  if (occurrences.length < 2) return undefined;
+  if (!occurrences.length) return undefined;
 
-  const rate = occurrences[0].value;
-  const amountOccurrences = occurrences.slice(1);
+  // A blank rate cell can render as "$ $2,069,890.00": the first marker has
+  // no number, so the sole occurrence is the final amount rather than a rate.
+  const rate = occurrences.length > 1 ? occurrences[0].value : undefined;
+  const amountOccurrences = occurrences.length > 1 ? occurrences.slice(1) : occurrences;
   const amounts: CurrencyAmounts = {};
   for (const occurrence of amountOccurrences) amounts[occurrence.currency.id] = occurrence.value;
   if (amounts[currencies[0].id] === undefined) return undefined;
@@ -319,7 +335,7 @@ function parseAmountOnlyLineItem(
   currencies: EstimateCurrency[],
 ): EstimateLineItem | undefined {
   const normalized = normalizeLine(text);
-  if (normalized.includes(" @ ")) return undefined;
+  if (normalized.includes(" @ ") || isBulletLine(normalized)) return undefined;
 
   const extracted = extractAmounts(normalized, currencies);
   if (!extracted) return undefined;
@@ -573,6 +589,17 @@ export function buildEstimateDocument(parsedPdf: ParsedPdf, sourceFileName: stri
         if (currentSubsection) currentSubsection.items.push(lineItem);
         else currentSection.items.push(lineItem);
         lastItem = lineItem;
+        continue;
+      }
+
+      const orphanAmount = text.match(new RegExp(`^(${NUMBER_PATTERN})$`, "u"));
+      if (
+        orphanAmount
+        && lastItem
+        && Object.values(lastItem.amounts).some(
+          (amount) => Math.abs(Math.abs(parseLocaleNumber(orphanAmount[1])) - Math.abs(amount)) <= 0.02,
+        )
+      ) {
         continue;
       }
 
